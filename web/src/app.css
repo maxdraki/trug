@@ -1,0 +1,93 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: 'Inter Variable', system-ui, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.4;
+  color: var(--ctp-text);
+  background: var(--ctp-base);
+  color-scheme: light dark;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+
+  /* --- design tokens (minimalist modernist) ------------------------------ */
+  /* Display face: Space Grotesk — a modernist grotesque for the wordmark,
+     shelf labels and counts; Inter carries everything else. */
+  --font-display: 'Space Grotesk Variable', 'Inter Variable', system-ui, sans-serif;
+  /* One radius for the whole system. */
+  --radius: 8px;
+  /* Hairline rule: the primary separator — depth comes from the
+     crust/mantle/base ladder plus these, not from glow. */
+  --hairline: 1px solid var(--ctp-surface0);
+  /* Near-imperceptible shadow, tinted from crust (never full-alpha black in
+     light flavours). The keyword black appears only inside this mix. */
+  --shadow-tint: color-mix(in srgb, var(--ctp-crust) 55%, black);
+  --shadow-1: 0 1px 2px color-mix(in srgb, var(--shadow-tint) 14%, transparent);
+  --shadow-2:
+    0 1px 2px color-mix(in srgb, var(--shadow-tint) 16%, transparent),
+    0 8px 24px -12px color-mix(in srgb, var(--shadow-tint) 28%, transparent);
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100svh;
+  /* dvh tracks the on-screen keyboard on browsers that resize the layout
+     viewport for it (paired with interactive-widget=resizes-content in
+     index.html); svh above is the fallback for browsers without dvh. */
+  min-height: 100dvh;
+  /* Ladder: page = crust; the app column = mantle; cards = base. */
+  background: var(--ctp-crust);
+}
+
+button,
+input,
+select {
+  font-family: inherit;
+}
+
+/* Keep tap targets from flashing a default highlight on mobile. */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* A11y floor: one consistent, visible focus treatment everywhere. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* CSS-only hover/focus transitions (JS-driven durations route through d()). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* Scrollbars as hairlines: thin surface0 thumb, no track — the default
+   chunky track fights the hairline aesthetic. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ctp-surface0) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--ctp-surface0);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--ctp-surface1);
+}

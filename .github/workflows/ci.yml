@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  server:
+    name: server (ruff + pytest, no-key mode)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    # The test suite must pass with NO LLM_API_KEY set, proving the app's
+    # no-key / offline mode works. We deliberately do not set that secret here.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv (with Python 3.12)
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Test (pytest, no LLM_API_KEY)
+        env:
+          # Explicitly blank so any LLM_API_KEY leaking from the environment
+          # cannot make the suite pass under a different mode.
+          LLM_API_KEY: ""
+        run: uv run pytest
+
+  web:
+    name: web (vitest + svelte-check + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 LTS. The repo was developed on Node 26, but the toolchain
+      # (vite 8, vitest 4, svelte 5) supports Node 22+, so LTS is used here.
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Test (vitest)
+        run: npx vitest run
+
+      - name: Type-check (svelte-check + tsc)
+        run: npm run check
+
+      - name: Build
+        run: npm run build

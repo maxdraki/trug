@@ -1,0 +1,51 @@
+[project]
+name = "trug"
+version = "0.1.0"
+description = "Trug shopping-list backend"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=44.0.0",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "python-multipart>=0.0.32",
+    "pyyaml>=6.0.3",
+    "uuid6>=2025.0.1",
+    "uvicorn[standard]>=0.52.1",
+    "webauthn>=3.0.0",
+]
+
+# `trug-doctor` — the CLI-only diagnostic + recovery tool. Installed as a console
+# script so `docker compose exec trug trug-doctor` is short; `python -m trug.doctor`
+# is the equivalent module entry point.
+[project.scripts]
+trug-doctor = "trug.doctor:main"
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The importable package lives at ./trug (no src/ layout).
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+# UP017 wants datetime.UTC, but the project mandates
+# `datetime.now(timezone.utc).isoformat()` for all timestamps.
+# B008 flags `Depends(...)` in argument defaults, which is the
+# idiomatic FastAPI dependency-injection pattern.
+ignore = ["UP017", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+# Test bodies are transcribed verbatim from the task briefs.
+"tests/*" = ["I001", "RUF059", "E702", "E401", "F401"]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.0.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]

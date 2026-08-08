@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/maxdraki/trug/blob/main/SECURITY.md
+    about: >-
+      Please do NOT open a public issue for security problems. Follow the private
+      disclosure path in SECURITY.md instead.
+  - name: Questions and setup help
+    url: https://github.com/maxdraki/trug/blob/main/README.md
+    about: >-
+      Deploying or configuring Trug? The README covers self-hosting, passkeys,
+      MCP, and the ring.

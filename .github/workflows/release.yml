@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  # contents: write lets the release job create the GitHub Release for the tag.
+  contents: write
+  packages: write
+  # SLSA build provenance: id-token mints the signing token, attestations
+  # writes the provenance to GitHub's attestation store so a pulled image is
+  # verifiably built from this tagged source.
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    name: Build and push multi-arch image to GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lowercase image name
+        id: image
+        # GHCR rejects uppercase image names; github.repository preserves the
+        # owner's case, so downcase it before using it in tags.
+        run: echo "repo=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tags
+        id: tags
+        # Always publish the exact :vX.Y.Z tag. Only move :latest for a real
+        # release — a prerelease tag (one with a hyphen, e.g. v0.2.0-rc1) must
+        # never clobber the :latest that self-hosters pin.
+        run: |
+          repo="${{ steps.image.outputs.repo }}"
+          ref="${{ github.ref_name }}"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/${repo}:${ref}"
+            case "$ref" in
+              *-*) : ;;                            # prerelease → no :latest
+              *) echo "ghcr.io/${repo}:latest" ;;  # real release → move :latest
+            esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          # Tag convention: keep the full ref name including the leading "v".
+          # A tag push of "v1.2.3" therefore publishes
+          # ghcr.io/<owner>/<repo>:v1.2.3, plus :latest for non-prerelease tags
+          # (see the "Compute image tags" step).
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Attach in-toto SLSA provenance to the image manifest in the registry.
+          provenance: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ steps.image.outputs.repo }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Create GitHub Release
+        # Publishes a Release for the pushed tag so the CHANGELOG's
+        # releases/tag/vX.Y.Z link resolves instead of 404-ing. Notes are
+        # auto-generated from the commits since the previous tag; a tag with a
+        # hyphen (e.g. v0.2.0-rc1) is marked as a prerelease.
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

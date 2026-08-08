@@ -1,0 +1,58 @@
+# The ./data bind mount arrives root-owned on Linux hosts (e.g. a Raspberry Pi),
+# but the container fixes this itself: docker-entrypoint.sh starts as root,
+# chowns the data dir to the pinned non-root user (uid:gid 999:999), and drops
+# privileges via gosu before running the app. No manual `chown` step is needed —
+# Linux, a Pi, and macOS (Docker Desktop / colima) all just work.
+services:
+  trug:
+    # Because a `build:` section is present, `docker compose up` BUILDS from
+    # source by default (a multi-minute build on a Pi). To use the prebuilt
+    # multi-arch image instead — a ~30s pull, once v0.1.0 is published to
+    # ghcr.io/maxdraki/trug — run `docker compose pull` first (or `up --pull
+    # always`). The `image:` tag names what gets pulled and what a from-source
+    # build is tagged as; `build: .` is the from-source path.
+    image: ghcr.io/maxdraki/trug:latest
+    build: .
+    ports:
+      # Default publishes on all interfaces — correct for direct LAN / Pi use.
+      - "8000:8000"
+      # Behind a reverse proxy or tunnel (Cloudflare Tunnel, Tailscale Serve),
+      # bind loopback-only instead so the port isn't directly reachable —
+      # otherwise a client hitting it directly can forge X-Forwarded-For and
+      # dodge the rate limiter:
+      # - "127.0.0.1:8000:8000"
+    # .env is optional: on first run with no .env present, trug generates three
+    # access tokens (TRUG_TOKEN_RING, TRUG_TOKEN_MCP, TRUG_BOOTSTRAP_TOKEN) and
+    # prints them to the logs (see `docker compose logs`).
+    # The `required: false` mapping form needs Compose v2.24+; older Compose
+    # will error on this key if you're on an older CLI/Desktop version.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # SQLite database persists here across restarts/rebuilds.
+      - ./data:/data
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Optional: expose Trug to the internet via a Cloudflare Tunnel (no ports
+  # forwarded on your router, TLS terminated by Cloudflare). Uncomment, drop
+  # your tunnel token into .env as CLOUDFLARE_TUNNEL_TOKEN, and point the tunnel
+  # at http://trug:8000 in the Cloudflare Zero Trust dashboard.
+  #
+  #   cloudflared:
+  #     image: cloudflare/cloudflared:latest
+  #     restart: unless-stopped
+  #     command: tunnel run
+  #     environment:
+  #       - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+  #     depends_on:
+  #       - trug
+  #
+  # Alternatives to Cloudflare Tunnel:
+  #   - Tailscale: run Trug on a tailnet node and reach it over the tailnet
+  #     (or share publicly with `tailscale funnel 8000`). No inbound firewall
+  #     changes needed.
+  #   - Your own reverse proxy (Caddy / nginx / Traefik): terminate TLS and
+  #     proxy to trug:8000. Handy if you already run a proxy for other services.
+  # ---------------------------------------------------------------------------

@@ -1,0 +1,28 @@
+# Dependencies (reinstalled inside the image)
+node_modules
+**/node_modules
+.venv
+**/.venv
+
+# Build output (the image rebuilds the PWA from source)
+web/dist
+
+# Local data & secrets (never bake into the image)
+data
+**/data
+.env
+.env.*
+!.env.example
+config.yaml
+*.db
+*.db-wal
+*.db-shm
+
+# Repo / tooling
+.git
+.gitignore
+.superpowers
+.pytest_cache
+.ruff_cache
+**/__pycache__
+.DS_Store

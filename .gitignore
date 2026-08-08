@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+web/dist/
+
+# Data & secrets
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+config.yaml
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.superpowers/
+
+# Claude Code local state — the deploy-trug skill is a shipped feature, keep it;
+# ignore local settings and scratch so they can never be committed.
+.claude/*
+!.claude/skills/

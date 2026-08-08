@@ -1,0 +1,168 @@
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { api, setToken, getToken, ApiError } from './api';
+
+function jsonResponse(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}) {
+  const status = init.status ?? 200;
+  return new Response(status === 204 ? null : JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+  });
+}
+
+describe('api client', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    localStorage.clear();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    setToken('tok-123');
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('setToken/getToken round-trip via localStorage', () => {
+    setToken('abc');
+    expect(getToken()).toBe('abc');
+    expect(localStorage.getItem('trug_token')).toBe('abc');
+  });
+
+  it('attaches the bearer Authorization header', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ active: {}, checked: [] }));
+    await api.list();
+    const [, init] = fetchMock.mock.calls[0];
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok-123');
+  });
+
+  it('list hits GET /api/list and returns the payload', async () => {
+    const payload = { active: { produce: [] }, checked: [] };
+    fetchMock.mockResolvedValue(jsonResponse(payload));
+    const res = await api.list();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/list');
+    expect(init.method ?? 'GET').toBe('GET');
+    expect(res).toEqual(payload);
+  });
+
+  it('addItem derives created=true from X-Created header', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ id: 'x' }, { headers: { 'X-Created': 'true' } }),
+    );
+    const { item, created } = await api.addItem({ id: 'x', name: 'Milk' });
+    expect(created).toBe(true);
+    expect(item).toEqual({ id: 'x' });
+  });
+
+  it('addItem derives created=false when X-Created is "false" (dedup hit)', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ id: 'x' }, { headers: { 'X-Created': 'false' } }),
+    );
+    const { created } = await api.addItem({ id: 'x', name: 'Milk' });
+    expect(created).toBe(false);
+  });
+
+  it('setStatus PATCHes the item status', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 'x', status: 'checked' }));
+    const item = await api.setStatus('x', 'checked');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/items/x');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ status: 'checked' });
+    expect(item.status).toBe('checked');
+  });
+
+  it('update PATCHes arbitrary fields', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ id: 'x', note: 'hi' }));
+    await api.update('x', { note: 'hi', category: 'dairy' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/items/x');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body as string)).toEqual({ note: 'hi', category: 'dairy' });
+  });
+
+  it('remove DELETEs and resolves void on 204', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(null, { status: 204 }));
+    await expect(api.remove('x')).resolves.toBeUndefined();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/items/x');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('clearChecked returns the cleared count n', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ cleared: 7 }));
+    const n = await api.clearChecked();
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/list/clear-checked');
+    expect(init.method).toBe('POST');
+    expect(n).toBe(7);
+  });
+
+  it('search hits the catalog endpoint with the query', async () => {
+    fetchMock.mockResolvedValue(jsonResponse([{ name_norm: 'milk' }]));
+    const res = await api.search('mi lk');
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/catalog?q=mi+lk');
+    expect(res).toHaveLength(1);
+  });
+
+  it('top hits the catalog/top endpoint with n', async () => {
+    fetchMock.mockResolvedValue(jsonResponse([]));
+    await api.top(24);
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/catalog/top?n=24');
+  });
+
+  it('listLlmModels POSTs the config and returns the model list', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ models: ['gemini-3.6-flash', 'gemini-2.5-flash'] }),
+    );
+    const res = await api.auth.listLlmModels({ provider: 'gemini', api_key: 'g-key' });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/auth/llm-config/models');
+    expect(init.method).toBe('POST');
+    expect(init.credentials).toBe('same-origin');
+    expect(JSON.parse(init.body as string)).toEqual({ provider: 'gemini', api_key: 'g-key' });
+    expect(res.models).toEqual(['gemini-3.6-flash', 'gemini-2.5-flash']);
+  });
+
+  it('listLlmModels surfaces a provider error detail with an empty list', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ models: [], detail: '401 unauthorized' }));
+    const res = await api.auth.listLlmModels({ provider: 'openai', api_key: 'sk-bad' });
+    expect(res.models).toEqual([]);
+    expect(res.detail).toBe('401 unauthorized');
+  });
+
+  it('bootstrapClaimOptions sends the bootstrap token as a one-shot bearer', async () => {
+    localStorage.clear(); // no stored token on a fresh instance
+    fetchMock.mockResolvedValue(jsonResponse({ challenge: 'c' }));
+    await api.auth.bootstrapClaimOptions('Alice', 'boot-secret');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/auth/bootstrap/claim/options');
+    expect(init.method).toBe('POST');
+    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer boot-secret');
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Alice' });
+  });
+
+  it('inviteUser POSTs the name and removeMember DELETEs by name', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ invite: 'tok', name: 'guest' }));
+    await api.auth.inviteUser('guest');
+    let [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/auth/invite');
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'guest' });
+
+    fetchMock.mockResolvedValue(jsonResponse(null, { status: 204 }));
+    await api.auth.removeMember('a b');
+    [url, init] = fetchMock.mock.calls[1];
+    expect(url).toBe('/auth/members/a%20b');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('surfaces a non-2xx response as ApiError with .status', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ error: 'nope' }, { status: 404 }));
+    const err = await api.list().catch((e) => e);
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.status).toBe(404);
+  });
+});
