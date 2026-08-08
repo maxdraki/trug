@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-08
+
+### Fixed
+
+- Coconut milk and coconut cream showed a fruit (apple) icon in Fruit & Veg —
+  the longest-match icon lookup picked `coconut` over `milk`. They now map to
+  the canned-goods icon in the Cupboard aisle, where you actually shop for them.
+  A one-time migration corrects already-added items on upgrade, so you don't
+  need to re-add anything.
+
 ## [0.1.0] - 2026-08-08
 
 ### Added
@@ -38,5 +48,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/maxdraki/trug/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0

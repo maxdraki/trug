@@ -22,6 +22,14 @@ def test_lookup_substring_containment():
     assert lookup("cherry tomatoes") != BUILTIN["cherry"]
 
 
+def test_coconut_milk_is_a_tin_not_a_fruit():
+    # The longest-key rule would resolve "coconut milk" to the coconut->apple
+    # fruit fallback; the explicit entries put the tinned products in Cupboard
+    # with the canned-goods icon instead.
+    assert lookup("coconut milk") == ("soup", "Cupboard")
+    assert lookup("coconut cream") == ("soup", "Cupboard")
+
+
 def test_lookup_min_length_miss():
     # "oil" (3 chars) is a real key but too short to substring-match, and
     # nothing else is contained, so an unknown word returns None.

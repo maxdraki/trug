@@ -103,6 +103,7 @@ class Repository:
         self._tidy_existing_names()
         self._collapse_duplicates()
         self._migrate_nut_icon()
+        self._migrate_coconut_milk_icon()
 
     def _migrate_nut_icon(self) -> None:
         """One-time backfill: rename the retired ``nut`` icon slug (a Tabler
@@ -114,6 +115,27 @@ class Repository:
             )
             self._conn.execute(
                 "UPDATE items SET icon = 'acorn' WHERE icon = 'nut'"
+            )
+            self._conn.commit()
+
+    def _migrate_coconut_milk_icon(self) -> None:
+        """One-time backfill: coconut milk/cream are tinned (the canned-goods
+        ``soup`` icon, Cupboard), but early adds catalogued them under the
+        ``coconut`` -> ``apple`` fruit fallback. The ``icon IS NULL`` enrichment
+        guard means the corrected map never re-applies to those rows, so rewrite
+        the stored icon and category directly on catalog and items. Scoped to the
+        ``apple`` fallback so a deliberately-set icon is untouched; idempotent (a
+        second run finds no ``apple`` rows for these names)."""
+        with self._lock:
+            self._conn.execute(
+                "UPDATE catalog SET icon = 'soup', category = 'Cupboard' "
+                "WHERE name_norm IN ('coconut milk', 'coconut cream') "
+                "AND icon = 'apple'"
+            )
+            self._conn.execute(
+                "UPDATE items SET icon = 'soup', category = 'Cupboard' "
+                "WHERE name_norm IN ('coconut milk', 'coconut cream') "
+                "AND icon = 'apple'"
             )
             self._conn.commit()
 

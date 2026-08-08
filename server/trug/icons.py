@@ -238,6 +238,10 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "tomato puree": ("soup", CUPBOARD),
     "passata": ("soup", CUPBOARD),
     "gravy": ("soup", CUPBOARD),
+    # Coconut milk/cream come in a tin — the canned-goods icon in Cupboard, not
+    # the "coconut" -> "apple" fruit fallback (Tabler has no coconut glyph).
+    "coconut milk": ("soup", CUPBOARD),
+    "coconut cream": ("soup", CUPBOARD),
     "flour": ("wheat", CUPBOARD),
     "yeast": ("wheat", CUPBOARD),
     "sugar": ("salt", CUPBOARD),

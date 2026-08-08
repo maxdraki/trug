@@ -386,3 +386,45 @@ def test_migration_nut_icon_rename_is_idempotent(tmp_path):
     Repository(str(dbfile))
     repo2 = Repository(str(dbfile))
     assert repo2.catalog_entry("pine kernels")["icon"] == "acorn"
+
+
+def _make_coconut_apple_db(tmp_path):
+    import sqlite3
+
+    dbfile = tmp_path / "coconut.db"
+    conn = sqlite3.connect(str(dbfile))
+    conn.executescript(_OLD_SCHEMA)
+    conn.execute(
+        "CREATE TABLE catalog (name_norm TEXT PRIMARY KEY, display_name TEXT NOT NULL, "
+        "icon TEXT, category TEXT, times_added INTEGER NOT NULL DEFAULT 0, last_added TEXT)"
+    )
+    # Coconut milk catalogued under the old coconut->apple fruit fallback.
+    conn.execute(
+        "INSERT INTO catalog (name_norm, display_name, icon, category) "
+        "VALUES ('coconut milk', 'Coconut Milk', 'apple', 'Fruit & Veg')"
+    )
+    conn.execute(
+        "INSERT INTO items (id, name, name_norm, icon, category, status, created_at) "
+        "VALUES ('c1', 'Coconut Milk', 'coconut milk', 'apple', 'Fruit & Veg', 'active', "
+        "'2020-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+    return dbfile
+
+
+def test_migration_fixes_coconut_milk_from_apple_to_tin(tmp_path):
+    dbfile = _make_coconut_apple_db(tmp_path)
+    repo = Repository(str(dbfile))
+    entry = repo.catalog_entry("coconut milk")
+    assert (entry["icon"], entry["category"]) == ("soup", "Cupboard")
+    active = repo.list_items()["active"]
+    item = next(i for i in active if i["name"] == "Coconut Milk")
+    assert (item["icon"], item["category"]) == ("soup", "Cupboard")
+
+
+def test_migration_coconut_milk_icon_is_idempotent(tmp_path):
+    dbfile = _make_coconut_apple_db(tmp_path)
+    Repository(str(dbfile))
+    repo2 = Repository(str(dbfile))
+    assert repo2.catalog_entry("coconut milk")["icon"] == "soup"
