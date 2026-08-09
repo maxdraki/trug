@@ -99,7 +99,7 @@
      hairline and a whisper of shadow. Accent is spent here — the add action. */
   .addbar {
     position: relative;
-    padding: 8px 16px calc(12px + env(safe-area-inset-bottom));
+    padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
   }
   /* Accent CTA at rest: a whisper of the accent washed through the pill (bg +
      border tint + placeholder), so the add action reads as the one primary
@@ -126,8 +126,8 @@
   }
   .dropdown {
     position: absolute;
-    left: 16px;
-    right: 16px;
+    left: 12px;
+    right: 12px;
     bottom: calc(100% - 2px);
     margin: 0 0 8px;
     padding: 4px;

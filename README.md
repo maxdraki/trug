@@ -324,6 +324,40 @@ rclone copy /backups/trug-$(date +%F).db gdrive:trug-backups
 [`scripts/backup-sample.sh`](scripts/backup-sample.sh) wraps this up for a nightly cron job.
 To restore, see [`docs/restore.md`](docs/restore.md).
 
+## Upgrading
+
+Your list, passkeys, and settings live in the `./data` volume, so they survive an upgrade — and
+Trug runs any database migrations automatically on boot. Taking a [backup](#backup) first is
+still a good habit.
+
+**Using the published image** (recommended):
+
+```sh
+docker compose pull      # fetch the new image from GHCR
+docker compose up -d     # recreate the container on it
+```
+
+**Building from source** (if you run the `build: .` path from a clone):
+
+```sh
+git pull
+docker compose up -d --build
+```
+
+Then confirm it's healthy and see the current tokens/version:
+
+```sh
+docker compose exec trug trug-doctor
+```
+
+For reproducible upgrades, pin a version instead of `:latest` — set
+`image: ghcr.io/maxdraki/trug:v0.1.1` (for example) in `docker-compose.yml` and bump it
+deliberately. See the [releases](https://github.com/maxdraki/trug/releases) and
+[CHANGELOG](CHANGELOG.md) for what each version changes.
+
+On **Railway**, a connected repo redeploys automatically on push; otherwise hit **Deploy** on
+the service.
+
 ## Deployment notes
 
 Trug is one container and one SQLite file — it runs nicely on a Raspberry Pi. To reach it

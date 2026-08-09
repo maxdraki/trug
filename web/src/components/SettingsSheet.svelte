@@ -12,7 +12,7 @@
     type LlmConfigInput,
     type LlmTestResult,
   } from '../lib/api';
-  import { clearSnapshot } from '../lib/snapshot';
+  import { clearSnapshot, formatAge } from '../lib/snapshot';
   import { resolveIcon } from '../lib/resolveIcon';
   import Icon from './Icon.svelte';
 
@@ -50,7 +50,7 @@
   // Every section is a disclosure. Theme + Accent default open (the everyday
   // adjustments); Devices, Invite, Connections default collapsed (occasional).
   // Open/closed state persists per section so the sheet reopens as you left it.
-  type SectionId = 'theme' | 'accent' | 'devices' | 'members' | 'connections' | 'ai';
+  type SectionId = 'theme' | 'accent' | 'devices' | 'members' | 'connections' | 'ai' | 'about';
   const DEFAULT_OPEN: Record<SectionId, boolean> = {
     theme: true,
     accent: true,
@@ -58,7 +58,12 @@
     members: false,
     connections: false,
     ai: false,
+    about: false,
   };
+
+  // Build version, injected by Vite's define. Guarded so tests (and any build
+  // without the define) fall back to 'dev' rather than throwing on the ident.
+  const version = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
 
   function loadOpen(): Record<SectionId, boolean> {
     try {
@@ -626,8 +631,13 @@
               <ul class="devices">
                 {#each sessions as s (s.id)}
                   <li class="device">
-                    <span class="device-name">
-                      {deviceLabel(s.user_agent)}{#if s.current}<span class="badge">this device</span>{/if}
+                    <span class="device-detail">
+                      <span class="device-name">
+                        {deviceLabel(s.user_agent)}{#if s.current}<span class="badge">this device</span>{/if}
+                      </span>
+                      <span class="device-last-active">
+                        {#if s.current}active now{:else}last active {formatAge(Date.now() - new Date(s.last_seen).getTime())}{/if}
+                      </span>
                     </span>
                     {#if !s.current}
                       <button
@@ -1018,6 +1028,29 @@
         </section>
       {/if}
 
+      <section>
+        {@render disclosure('about', 'About')}
+        {#if openSections.about}
+          <div
+            class="region"
+            id="settings-region-about"
+            role="region"
+            aria-label="About"
+            transition:slide={{ duration: d(DUR.slide) }}
+          >
+            <p class="hint">Trug v{version}</p>
+            <p class="hint">
+              <a
+                class="repo-link"
+                href="https://github.com/maxdraki/trug"
+                target="_blank"
+                rel="noopener noreferrer">github.com/maxdraki/trug</a
+              >
+            </p>
+          </div>
+        {/if}
+      </section>
+
       <div class="actions">
         <button type="button" class="ghost" onclick={onClose}>Done</button>
       </div>
@@ -1174,6 +1207,13 @@
   .hint.error {
     color: var(--ctp-red);
   }
+  .repo-link {
+    color: var(--accent);
+    text-decoration: none;
+  }
+  .repo-link:hover {
+    text-decoration: underline;
+  }
   .devices {
     list-style: none;
     margin: 0;
@@ -1193,10 +1233,20 @@
   .device:last-child {
     border-bottom: none;
   }
+  .device-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
   .device-name {
     display: inline-flex;
     align-items: center;
     gap: 8px;
+  }
+  .device-last-active {
+    font-size: 12px;
+    color: var(--ctp-subtext0);
   }
   .badge {
     font-size: 11px;

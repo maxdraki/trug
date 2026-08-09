@@ -36,6 +36,25 @@ logger = logging.getLogger("trug.mcp")
 PROTOCOL_VERSION = "2026-07-28"
 SERVER_INFO = {"name": "trug", "version": "2.0"}
 
+
+def _server_info(origin: str) -> dict:
+    """`initialize` serverInfo, including the MCP `icons` field (spec 2025-11-25+)
+    so a client that renders server branding shows the Trug logo instead of the
+    generic connector icon. `src` points at the same-origin PWA icon Trug already
+    serves (a data URI would also be valid); clients trust same-origin icons."""
+    return {
+        **SERVER_INFO,
+        "title": "Trug",
+        "websiteUrl": origin,
+        "icons": [
+            {
+                "src": f"{origin}/icons/icon-192.png",
+                "mimeType": "image/png",
+                "sizes": ["192x192"],
+            }
+        ],
+    }
+
 # List-shaped tool results carry a short client-side cache hint (~5s): the
 # household shops together, so a few seconds of staleness is fine and saves
 # round-trips.
@@ -368,7 +387,9 @@ async def mcp_endpoint(request: Request, caller: Principal = Depends(mcp_only)):
             {
                 "protocolVersion": params.get("protocolVersion") or PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": SERVER_INFO,
+                "serverInfo": _server_info(
+                    request.app.state.settings.origin.rstrip("/")
+                ),
             },
         )
 

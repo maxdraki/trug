@@ -356,11 +356,6 @@
     <span class="labels">
       <span class="name">
         {item.name}
-        {#if item.source === 'ring'}
-          <span class="badge" role="img" aria-label="added by the ring" title="added by the ring">
-            <Icon name="wand" size={12} stroke={2} />
-          </span>
-        {/if}
       </span>
       {#if item.note}<span class="note">{item.note}</span>{/if}
     </span>
@@ -537,11 +532,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .badge {
-    flex: 0 0 auto;
-    display: inline-flex;
-    color: var(--ctp-overlay1);
   }
   /* De-emphasise a checked row through the strike + a hollowed, dimmed chip —
      NOT by dropping the text contrast. The name stays at subtext1 (>=4.5:1 in

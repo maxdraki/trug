@@ -9,7 +9,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from trug.auth_repo import _MAX_OBSERVED_HOSTS, AuthRepository
@@ -250,6 +251,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Serve the built PWA at the root, but only after the API routes so
     # /healthz and /api/* always win over the static catch-all.
     static_dir = Path(settings.static_dir)
+
+    # Explicit /favicon.ico (and /favicon.png): the built PWA ships only an SVG
+    # favicon, so the classic /favicon.ico path 404s. Clients (and MCP connector
+    # UIs) that sniff the default favicon path get the PWA's PNG icon instead.
+    _favicon_png = static_dir / "icons" / "icon-192.png"
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    @app.get("/favicon.png", include_in_schema=False)
+    def favicon():
+        if _favicon_png.is_file():
+            return FileResponse(_favicon_png, media_type="image/png")
+        return Response(status_code=404)
+
     if static_dir.is_dir():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 

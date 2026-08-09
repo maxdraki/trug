@@ -23,7 +23,6 @@ if (ITEM_SLUGS.length < 40) throw new Error(`suspiciously few server slugs parse
 /** Chrome icons used directly by components. */
 const UI_SLUGS = [
   'basket',
-  'wand',
   'settings',
   'x',
   'pencil',

@@ -62,6 +62,18 @@ def test_initialize_returns_server_info():
     assert result["serverInfo"]["name"] == "trug"
 
 
+def test_initialize_serverinfo_includes_branding_icons():
+    c = make_client()
+    r = rpc(c, "initialize", {"protocolVersion": "2026-07-28", "capabilities": {}})
+    info = r.json()["result"]["serverInfo"]
+    assert info["title"] == "Trug"
+    assert info["websiteUrl"]
+    icons = info["icons"]
+    assert isinstance(icons, list) and icons
+    assert icons[0]["src"].endswith("/icons/icon-192.png")
+    assert icons[0]["mimeType"] == "image/png"
+
+
 def test_initialized_notification_accepted():
     c = make_client()
     # A JSON-RPC notification (no id) gets a 202 with no body.

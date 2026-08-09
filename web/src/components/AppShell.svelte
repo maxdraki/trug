@@ -223,7 +223,7 @@
       {/if}
       {#if offline}<span class="offline" title="Offline — changes will sync">offline</span>{/if}
       <button type="button" class="gear" aria-label="Settings" onclick={() => (settingsOpen = true)}>
-        <Icon name="settings" size={18} stroke={1.75} />
+        <Icon name="settings" size={20} stroke={1.75} />
       </button>
     </div>
   </header>

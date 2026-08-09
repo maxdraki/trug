@@ -137,6 +137,20 @@ describe('SettingsSheet', () => {
     await waitFor(() => expect(revokeSession).toHaveBeenCalledWith('s2'));
   });
 
+  it('shows a last-active age for a device so multiple devices are distinguishable', async () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    sessions.mockResolvedValue([
+      { id: 's1', created_at: '', last_seen: '', user_agent: 'iPhone; Mobile', current: true },
+      { id: 's2', created_at: '', last_seen: twoHoursAgo, user_agent: 'Macintosh', current: false },
+    ]);
+    render(SettingsSheet, { open: true, cookieAuth: true, onClose: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Devices' }));
+    await waitFor(() => expect(sessions).toHaveBeenCalled());
+    expect(await screen.findByText(/last active .*ago/i)).toBeTruthy();
+    expect(screen.getByText(/hours ago/i)).toBeTruthy();
+  });
+
   it('does not query sessions when not cookie-authed', () => {
     render(SettingsSheet, { open: true, onClose: vi.fn() });
     expect(sessions).not.toHaveBeenCalled();
@@ -520,5 +534,20 @@ describe('SettingsSheet', () => {
     expect(screen.queryByLabelText('API key')).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Replace' }));
     expect(screen.getByLabelText('API key')).toBeTruthy();
+  });
+
+  // --- About ------------------------------------------------------------------
+
+  it('shows the version and repo link in the About section', async () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'About' }));
+    const link = (await screen.findByRole('link', {
+      name: /github\.com\/maxdraki\/trug/i,
+    })) as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe('https://github.com/maxdraki/trug');
+    // Version string is present; exact number depends on the build's define, so
+    // just assert a "v…" line (v0.1.1 in a real build, v-dev without the define).
+    expect(screen.getByText(/\bv\S/i)).toBeTruthy();
   });
 });

@@ -126,3 +126,26 @@ def test_throttle_map_bounded_under_distinct_host_flood():
     # The persisted table is already capped; the in-memory throttle map must be
     # capped too so distinct spoofed hosts can't grow it without bound.
     assert len(app.state.observed_host_throttle) <= _MAX_OBSERVED_HOSTS
+
+
+# --- favicon: default /favicon.ico path must resolve to the PWA PNG ----------
+
+
+def test_favicon_ico_serves_png_when_static_present(tmp_path):
+    icons = tmp_path / "icons"
+    icons.mkdir()
+    (icons / "icon-192.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+    s = Settings.load(
+        {
+            "TRUG_TOKEN_RING": "tok-ring",
+            "TRUG_TOKEN_MCP": "tok-mcp",
+            "TRUG_DB_PATH": ":memory:",
+            "TRUG_STATIC_DIR": str(tmp_path),
+        },
+        None,
+    )
+    c = TestClient(create_app(s))
+    r = c.get("/favicon.ico")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/png"
+    assert r.content.startswith(b"\x89PNG")

@@ -159,7 +159,7 @@
     align-items: center;
     gap: 8px;
     margin: 0;
-    padding: 10px 14px 8px;
+    padding: 10px 20px 8px;
     font-family: var(--font-display);
     font-size: 13px;
     font-weight: 500;
@@ -167,6 +167,8 @@
     letter-spacing: 0.12em;
     /* subtext1 clears 4.5:1 on the base surface in both Latte and Mocha. */
     color: var(--ctp-subtext1);
+    /* A whisper of accent tints the shelf label. */
+    background: color-mix(in srgb, var(--accent) 3%, transparent);
     /* The shelf edge the rows sit on. */
     border-bottom: var(--hairline);
     transition: color 120ms ease, border-color 120ms ease;

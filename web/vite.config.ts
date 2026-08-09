@@ -2,6 +2,9 @@
 import { defineConfig, type Plugin } from 'vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { VitePWA } from 'vite-plugin-pwa'
+import pkg from './package.json' with { type: 'json' }
+
+const { version } = pkg
 
 // Vite's built-in `vite:asset-import-meta-url` plugin rewrites the AST pattern
 // `new URL(<literal>, import.meta.url)` into a served-asset URL. In tests that
@@ -21,6 +24,7 @@ const keepImportMetaUrlInTests: Plugin = {
 
 // https://vite.dev/config/
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(version) },
   plugins: [
     svelte(),
     keepImportMetaUrlInTests,

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-09
+
+### Added
+
+- Settings now has an **About** section with the app version and a link to the
+  project, and the **Devices** list shows when each device was last active (and
+  which one is "this device") so you can tell them apart before revoking one.
+- An **Upgrading** guide in the README (pull the image or rebuild from source;
+  data persists and migrations run automatically).
+- The MCP server advertises its icon (`serverInfo.icons`) and serves a favicon,
+  so clients that support it can show the Trug logo for the connector.
+
+### Changed
+
+- UI polish: a larger settings button, the add-item box reads as the primary
+  action, and aisle headers carry a faint accent wash. Per-row source badges
+  were removed as visual noise.
+
 ## [0.1.1] - 2026-08-08
 
 ### Fixed
@@ -48,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/maxdraki/trug/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/maxdraki/trug/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0
