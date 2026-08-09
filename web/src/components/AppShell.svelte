@@ -55,6 +55,42 @@
     clearTimeout(dragErrorTimer);
     dragErrorTimer = setTimeout(() => (dragError = null), 4000);
   }
+
+  // "Copy list": the outstanding items, one name per line in shelf display
+  // order — the shape supermarket multisearch boxes accept as a paste. Success
+  // swaps the icon to a check and toasts; a blocked clipboard gets an honest
+  // failure toast (there's no selectable-text fallback up here in the header).
+  // Plain-HTTP installs (LAN/Pi) have no Clipboard API at all — hide the button
+  // there rather than render a permanently dead affordance. Static per load.
+  const canCopy = typeof navigator !== 'undefined' && !!navigator.clipboard;
+  let copied = $state(false);
+  let copyToast = $state<{ text: string; variant: 'accent' | 'neutral' } | null>(null);
+  let copiedTimer: ReturnType<typeof setTimeout> | undefined;
+  let copyToastTimer: ReturnType<typeof setTimeout> | undefined;
+
+  async function copyList() {
+    // Read groups once — the getter recomputes per access. Empty is a race
+    // guard only (last item checked between render and tap), not a real path:
+    // the button is hidden whenever groups is empty.
+    const names = store.groups.flatMap((g) => g.items).map((i) => i.name);
+    if (!names.length) return;
+    try {
+      await navigator.clipboard.writeText(names.join('\n'));
+      copied = true;
+      clearTimeout(copiedTimer);
+      copiedTimer = setTimeout(() => (copied = false), 1500);
+      copyToast = { text: `Copied ${names.length} item${names.length === 1 ? '' : 's'}`, variant: 'accent' };
+    } catch (err) {
+      // Permission denied / document unfocused. Leave a trace for remote
+      // debugging ("copy doesn't work on my phone") — the toast alone is mute.
+      console.warn('copy list failed', err);
+      copied = false;
+      clearTimeout(copiedTimer);
+      copyToast = { text: "Couldn't copy — clipboard blocked", variant: 'neutral' };
+    }
+    clearTimeout(copyToastTimer);
+    copyToastTimer = setTimeout(() => (copyToast = null), 3000);
+  }
   // Measured footer height, published as --footer-h so docked toasts sit just
   // above the add-bar (safe-area padding is already included in the measurement).
   let footerH = $state(0);
@@ -199,6 +235,8 @@
       if (ringBatchTimer) clearTimeout(ringBatchTimer);
       clearTimeout(ringToastTimer);
       clearTimeout(dragErrorTimer);
+      clearTimeout(copiedTimer);
+      clearTimeout(copyToastTimer);
     };
   });
 
@@ -222,7 +260,12 @@
         <span class="queued" title="Waiting to sync">{queued} queued</span>
       {/if}
       {#if offline}<span class="offline" title="Offline — changes will sync">offline</span>{/if}
-      <button type="button" class="gear" aria-label="Settings" onclick={() => (settingsOpen = true)}>
+      {#if canCopy && store.groups.length > 0}
+        <button type="button" class="icon-btn" aria-label="Copy list" title="Copy list" onclick={copyList}>
+          <Icon name={copied ? 'copy-check' : 'copy'} size={20} stroke={1.75} />
+        </button>
+      {/if}
+      <button type="button" class="icon-btn" aria-label="Settings" onclick={() => (settingsOpen = true)}>
         <Icon name="settings" size={20} stroke={1.75} />
       </button>
     </div>
@@ -261,6 +304,10 @@
 
   {#if dragError}
     <Toast variant="neutral">{dragError}</Toast>
+  {/if}
+
+  {#if copyToast}
+    <Toast variant={copyToast.variant}>{copyToast.text}</Toast>
   {/if}
 
   <SettingsSheet
@@ -335,7 +382,7 @@
     padding: 3px 8px;
     border-radius: var(--radius);
   }
-  .gear {
+  .icon-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -349,7 +396,7 @@
     cursor: pointer;
     transition: color 120ms ease, background 120ms ease;
   }
-  .gear:hover {
+  .icon-btn:hover {
     background: var(--ctp-surface0);
     color: var(--ctp-text);
   }

@@ -181,3 +181,105 @@ describe('App auth-gated live-sync', () => {
     expect(screen.queryByText(/this instance has no owner yet/i)).toBeNull();
   });
 });
+
+// "Copy list" puts the outstanding items on the clipboard, one name per line in
+// shelf display order — the shape supermarket multisearch boxes paste cleanly.
+describe('App copy-list button', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+
+  function makeItem(name: string, sortKey: number): Record<string, unknown> {
+    return {
+      id: `id-${name}`,
+      name,
+      note: null,
+      icon: null,
+      category: null,
+      status: 'active',
+      source: 'pwa',
+      added_by: null,
+      created_at: '2026-08-09T10:00:00Z',
+      checked_at: null,
+      sort_key: sortKey,
+    };
+  }
+
+  beforeEach(() => {
+    // Signed-in human so AppShell mounts (mocks reset by the outer beforeEach
+    // don't apply across describes — repeat the auth arrangement here).
+    vi.clearAllMocks();
+    clearSnapshot();
+    storeMock = makeStore();
+    storeMock.groups = [
+      { category: 'Fruit & Veg', items: [makeItem('Lemon', 1), makeItem('Bananas', 2)] },
+      { category: 'Cupboard', items: [makeItem('Coffee', 1)] },
+    ];
+    getToken.mockReturnValue('tok');
+    probeAuthStatus.mockResolvedValue('ok');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: false });
+    apiTop.mockResolvedValue([]);
+    apiSearch.mockResolvedValue([]);
+    apiList.mockResolvedValue({ items: [] });
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    // @ts-expect-error test double for jsdom global
+    globalThis.EventSource = vi.fn();
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: false, status: 401 } as Response),
+    ) as unknown as typeof fetch;
+
+    writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+    });
+  });
+
+  it('copies unchecked names newline-joined in shelf display order', async () => {
+    render(App);
+    const btn = await screen.findByRole('button', { name: /copy list/i });
+    btn.click();
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Lemon\nBananas\nCoffee'));
+  });
+
+  it('shows a "Copied 3 items" toast on success', async () => {
+    render(App);
+    const btn = await screen.findByRole('button', { name: /copy list/i });
+    btn.click();
+    expect(await screen.findByText(/copied 3 items/i)).toBeTruthy();
+  });
+
+  it('shows an honest failure toast when the clipboard write is blocked', async () => {
+    writeText.mockRejectedValue(new Error('denied'));
+    // The failure path deliberately console.warns for debuggability — keep the
+    // test output clean and assert the trace exists.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(App);
+    const btn = await screen.findByRole('button', { name: /copy list/i });
+    btn.click();
+    expect(await screen.findByText(/couldn't copy/i)).toBeTruthy();
+    expect(warn).toHaveBeenCalledWith('copy list failed', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('hides the button when there is nothing to copy', async () => {
+    storeMock.groups = [];
+    render(App);
+    // Wait for AppShell to be up (the settings gear is its always-there chrome)…
+    await screen.findByRole('button', { name: /settings/i });
+    // …then assert the copy affordance is absent, not merely disabled.
+    expect(screen.queryByRole('button', { name: /copy list/i })).toBeNull();
+  });
+
+  it('hides the button when the Clipboard API is unavailable (insecure context)', async () => {
+    // Plain-HTTP LAN/Pi installs have no navigator.clipboard at all — the
+    // button must not render as a permanently dead affordance there.
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    render(App);
+    await screen.findByRole('button', { name: /settings/i });
+    expect(screen.queryByRole('button', { name: /copy list/i })).toBeNull();
+  });
+});

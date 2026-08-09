@@ -27,6 +27,9 @@ const UI_SLUGS = [
   'x',
   'pencil',
   'plus',
+  // Header copy-list button: rest state + brief "copied" confirmation swap.
+  'copy',
+  'copy-check',
   // Connections section: reveal/hide toggle for masked tokens.
   'eye',
   'eye-off',

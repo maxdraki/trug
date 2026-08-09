@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-09
+
+### Added
+
+- A **Copy list** button in the header: puts the outstanding items on the
+  clipboard, one name per line in shelf order — ready to paste into a
+  supermarket's multi-search box. Shown only where the browser's Clipboard API
+  is available (it needs HTTPS or localhost).
+
 ## [0.1.2] - 2026-08-09
 
 ### Added
@@ -66,7 +75,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/maxdraki/trug/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/maxdraki/trug/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/maxdraki/trug/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0
