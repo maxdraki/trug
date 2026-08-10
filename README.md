@@ -38,6 +38,12 @@ Raspberry Pi behind a Cloudflare Tunnel, on a Tailscale node, or on Railway.
 </p>
 
 
+<p align="center">
+  <a href="https://railway.com/deploy/Y944p3?referralCode=sXZPkF&utm_medium=integration&utm_source=template&utm_campaign=generic"><img src="https://railway.com/button.svg" alt="Deploy on Railway" height="32"></a>
+</p>
+
+<p align="center"><em>One click, no terminal — or self-host with Docker Compose below.</em></p>
+
 ## Quickstart (self-host with Docker Compose)
 
 From a clone to your household on their phones with passkeys:
@@ -152,7 +158,29 @@ key](#bring-your-own-key-optional)).
 
 ## Railway
 
-Trug runs on [Railway](https://railway.app) as a single service with one volume:
+### One click (recommended)
+
+[**Deploy on Railway**](https://railway.com/deploy/Y944p3?referralCode=sXZPkF&utm_medium=integration&utm_source=template&utm_campaign=generic) builds Trug, attaches the volume, generates your
+tokens and works out the passkey settings from your new domain — there is nothing to type
+and no logs to read.
+
+1. Click the button and deploy. Railway gives the service a domain like
+   `trug-production.up.railway.app`.
+2. Open that URL. Trug will tell you it hasn't been claimed yet and ask for a bootstrap token.
+3. Copy `TRUG_BOOTSTRAP_TOKEN` from the service's **Variables** tab and paste it in.
+4. Pick a name, create your passkey, then invite everyone else from **Settings → Members**.
+
+Costs Railway's **Hobby plan (~$5/month, which includes $5 of usage)** — Trug is a single
+small container and sits comfortably inside that allowance.
+
+All three tokens are generated once at deploy time and pinned from birth, so they live in the
+Variables tab and survive restarts. The "read the tokens from the logs" steps elsewhere in
+this README apply only to the manual paths below.
+
+### Deploying your own fork manually
+
+If you'd rather build from your own fork, Trug runs on [Railway](https://railway.app) as a
+single service with one volume:
 
 1. **Deploy from the repo.** New Project → Deploy from GitHub repo → pick your fork. Railway
    builds the `Dockerfile` as-is.
@@ -162,6 +190,11 @@ Trug runs on [Railway](https://railway.app) as a single service with one volume:
 3. **Set the environment variables** on the service: `TRUG_RP_ID` and `TRUG_ORIGIN` for your
    domain (there's no `TRUG_USERS` — the roster is dynamic). Optionally pin
    `TRUG_TOKEN_RING` / `TRUG_TOKEN_MCP` and `TRUG_BOOTSTRAP_TOKEN`, and set the `LLM_*` keys.
+   Behind Railway's proxy, also set `TRUG_TRUSTED_PROXY_HOPS=1` so the rate limiter keys on
+   real client IPs rather than the shared proxy address. Leave `PORT` alone: Railway sets it
+   and points your domain at the same port, and Trug binds whatever it's given. Only pin
+   `PORT` if you have also pinned the domain's target port — the two must match, or the
+   domain answers 502 while the container looks perfectly healthy.
 4. **Use the generated domain.** Under Settings → Networking, generate a domain (e.g.
    `trug.up.railway.app`). **`TRUG_ORIGIN` must exactly match it** (`https://trug.up.railway.app`)
    and `TRUG_RP_ID` must be the bare host (`trug.up.railway.app`), or passkeys and the MCP
