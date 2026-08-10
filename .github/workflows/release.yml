@@ -65,6 +65,31 @@ jobs:
           fi
           echo "Publishing $published, which is what users pull."
 
+      - name: Check the in-app version matches the tag
+        # Settings → About shows web/package.json's version, injected as
+        # __APP_VERSION__ by Vite. Nothing bumps it automatically, so tagging
+        # without editing it ships an image that reports the PREVIOUS release to
+        # every user — which is exactly what v0.2.0 did: tagged 0.2.0, phone said
+        # 0.1.5. The tag is the loud thing; the number people actually read is
+        # this one, so they have to agree before anything is published.
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          tag_version="${REF_NAME#v}"
+          app_version="$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' web/package.json | head -n 1)"
+          py_version="$(sed -n 's/^version = "\([^"]*\)".*/\1/p' server/pyproject.toml | head -n 1)"
+          echo "tag=$tag_version  web=$app_version  server=$py_version"
+          if [ "$tag_version" != "$app_version" ]; then
+            echo "::error::Tag $REF_NAME does not match web/package.json ($app_version)."
+            echo "::error::Settings → About would show $app_version to everyone on $REF_NAME."
+            echo "::error::Bump web/package.json (and server/pyproject.toml), commit, re-tag."
+            exit 1
+          fi
+          if [ "$tag_version" != "$py_version" ]; then
+            echo "::error::Tag $REF_NAME does not match server/pyproject.toml ($py_version)."
+            exit 1
+          fi
+
       - name: Compute image tags
         id: tags
         # Always publish the exact :vX.Y.Z tag. Only move :latest for a real

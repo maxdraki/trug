@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-10
+
+### Fixed
+
+- Settings → About showed `0.1.5` on the 0.2.0 release. The in-app version comes from
+  `web/package.json` (injected as `__APP_VERSION__`), nothing bumps it automatically, and the
+  release runbook never mentioned it — so tagging shipped an image reporting the previous
+  release to everyone. The release workflow now refuses to publish when the tag,
+  `web/package.json` and `server/pyproject.toml` disagree.
+- `server/pyproject.toml` had been `0.1.0` since the first release. All three now move together.
+
 ## [0.2.0] - 2026-08-10
 
 ### Added
@@ -120,6 +131,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/maxdraki/trug/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/maxdraki/trug/compare/v0.1.5...v0.2.0
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0
