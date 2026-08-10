@@ -43,9 +43,22 @@ household list is the other phone in the house, and it's what makes `trug share`
 | `trug logs [-f]` | what the server is saying |
 | `trug share` | a link and a QR for everyone else on the network |
 | `trug set-origin <https-url>` | point Trug at its new name, and check it took |
+| `trug doctor [args…]` | run `trug-doctor` in the container, flags and all |
 
-That's the whole CLI — six verbs, no more. `trug status` and `trug set-origin` both run
+That's the whole CLI — seven verbs, no more. `trug status` and `trug set-origin` both run
 `trug-doctor` and hand you its exit code: `0` healthy, `1` warnings, `2` broken.
+
+Every one of them works from any directory: the compose file is in `~/.trug` and `trug` knows it.
+That is the difference between these and the `docker compose …` lines further down, which need a
+`docker-compose.yml` in the directory you're standing in. Where no verb covers what you want, name
+the directory:
+
+```sh
+docker compose --project-directory ~/.trug pull
+```
+
+`trug doctor` exists so recovery isn't a Docker exercise. `trug doctor recover --invite NAME`
+mints an invite link when nobody can sign in — more in [recovery](operations.md#recovery).
 
 `trug set-origin` is the one that saves you a silent afternoon. It writes `TRUG_ORIGIN`, derives
 `TRUG_RP_ID` as the bare host, restarts, and checks the result. It also refuses the four inputs
@@ -107,6 +120,12 @@ only to the manual paths.
 
 The long way round, if you'd rather see every step — or you're working from a clone anyway. From
 a clone to your household on their phones.
+
+Every `docker compose …` line in this section runs **inside the clone**, which is where the
+compose file is. Run one somewhere else and Docker says `no configuration file provided: not
+found`. There's no `trug` command on this path — that comes with
+[the installer](#one-command), which is a separate install with its own database, not a wrapper
+you can bolt onto a clone.
 
 ### 1. Clone and start it
 
@@ -270,9 +289,11 @@ sudo systemctl enable docker
 
 ### Put the database somewhere better than the SD card
 
-SQLite writes constantly, and SD cards wear out and corrupt. If the Pi has a USB SSD, clone Trug
-onto it so `./data` lives there. If it doesn't, take [backups](operations.md#backup) on a schedule
-and mean it.
+SQLite writes constantly, and SD cards wear out and corrupt. If the Pi has a USB SSD, put the
+install on it — `TRUG_HOME=/mnt/ssd/trug` on the installer one-liner, or clone there if you're
+doing it by hand. The `trug` command reads the same variable, so keep it exported (or in your
+`.bashrc`) and every verb keeps finding the install. If there's no SSD, take
+[backups](operations.md#backup) on a schedule and mean it.
 
 ## Your own fork on Railway
 
@@ -306,17 +327,22 @@ railway logs | grep -E 'TRUG_BOOTSTRAP_TOKEN|TRUG_TOKEN'
 
 ## Two things about the image
 
-**Prebuilt or from source.** On a tagged release, a multi-arch (`amd64` + `arm64`) image publishes
-to GHCR at `ghcr.io/maxdraki/trug`. The compose file carries `image: ghcr.io/maxdraki/trug:latest`
-alongside `build: .` — and because that `build:` section is present, `docker compose up` **builds
-from source by default**, which is a multi-minute wait on a Pi. Run `docker compose pull` first
-(or `docker compose up --pull always`) for the ~30 second pull instead. If the image isn't there,
-Compose builds from source as usual, and `docker compose build` always forces that.
+Both of these are about the **repo's** compose file. The installer writes its own into `~/.trug`
+with neither trap in it, so skip this section if you used the one-liner.
 
-**Compose version.** The `env_file: [{ path, required }]` long form in `docker-compose.yml` needs
-Compose **v2.24+** (January 2024). A box set up with Debian's `docker.io` plus a standalone
-`docker-compose` v1 will hard-error on that key — install Docker's own apt repo for a current
-Compose.
+**Prebuilt or from source.** On a tagged release, a multi-arch (`amd64` + `arm64`) image publishes
+to GHCR at `ghcr.io/maxdraki/trug`. The repo's compose file carries
+`image: ghcr.io/maxdraki/trug:latest` alongside `build: .` — and because that `build:` section is
+present, `docker compose up` **builds from source by default**, which is a multi-minute wait on a
+Pi. Run `docker compose pull` first (or `docker compose up --pull always`) for the ~30 second pull
+instead. If the image isn't there, Compose builds from source as usual, and `docker compose build`
+always forces that. The installer's compose file has no `build:` at all — it only ever pulls.
+
+**Compose version.** The `env_file: [{ path, required }]` long form in the repo's
+`docker-compose.yml` needs Compose **v2.24+** (January 2024). A box set up with Debian's
+`docker.io` plus a standalone `docker-compose` v1 will hard-error on that key — install Docker's
+own apt repo for a current Compose. The installer writes the short `env_file: .env` form, which
+older Compose takes.
 
 ## Next
 

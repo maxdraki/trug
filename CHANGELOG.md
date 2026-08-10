@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-10
+
+### Added
+
+- `trug doctor [args…]` — runs `trug-doctor` inside the container from wherever you are. The
+  documented recovery commands were `docker compose exec trug trug-doctor recover …`, which only
+  works from the directory holding the compose file. After a one-line install that directory is
+  `~/.trug` and nobody is standing in it, so the lockout escape hatch answered
+  "no configuration file provided: not found" — at precisely the moment you can't get in.
+
+### Fixed
+
+- Re-adding something you'd already checked off made the whole list jitter. The optimistic row was
+  fabricated in `Other` under a new id while the struck-through row was still in the basket — so
+  the name was on screen twice — and the server's reply (the original row, reactivated, in its real
+  aisle) then destroyed that row and inserted another elsewhere. Three overlapping height changes
+  for one logical move. A name already on the list now moves the row that's there.
+- The basket card eases shut instead of vanishing in a frame, and the scroll container no longer
+  anchors mid-animation — the browser was adjusting scroll position to hold one node still, which
+  moved everything else.
+- The installer's closing message now explains that `localhost` is the address that prompts for a
+  passkey and the only one where an account can be created, while the network link skips passkeys
+  and shares a single identity across everyone who opens it.
+
 ## [0.2.1] - 2026-08-10
 
 ### Fixed
@@ -131,7 +155,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/maxdraki/trug/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/maxdraki/trug/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/maxdraki/trug/compare/v0.1.5...v0.2.0
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0

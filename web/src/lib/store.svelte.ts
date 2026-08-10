@@ -1,6 +1,6 @@
 import { uuidv7 } from 'uuidv7';
 import { ApiError } from './api';
-import { tidyName } from './text';
+import { tidyName, normaliseName } from './text';
 import { readSnapshot, writeSnapshot } from './snapshot';
 import type { api as realApi } from './api';
 import type { OpQueue } from './opqueue';
@@ -266,8 +266,32 @@ export function createStore(deps: StoreDeps): Store {
     // Mirror the server's tidy_name so the optimistic row already reads as it
     // will once reconciled — no case-flash when the server row lands.
     const display = tidyName(name);
-    place(optimisticRow(id, display, note ?? null, new Date().toISOString()));
-    addPending(id);
+
+    // Does this name already exist here? The server dedups on a normalised name
+    // — an active match is returned untouched, a checked one is REACTIVATED in
+    // place, keeping its own id, aisle and icon. Fabricating an optimistic row
+    // anyway meant the name appeared twice (once struck through in the basket,
+    // once fresh in `Other`), and then the reply destroyed that row and inserted
+    // the real one somewhere else: three overlapping height changes for one
+    // logical move, which is what read as the whole list jittering.
+    //
+    // So when we can see the match locally, move THAT row instead. Same id, so
+    // the keyed each animates one row; real category, so no `Other` detour; and
+    // because the id we mark pending is the one the server will echo over SSE,
+    // the duplicate broadcast is suppressed too.
+    //
+    // The op still carries a fresh id. That is deliberate: the server's
+    // id-idempotency check returns an existing row UNCHANGED, so reusing the
+    // match's id would leave it checked. An unmatched fresh id falls through to
+    // the reactivate branch, which is what bumps the catalog for "buy it again".
+    const existing = [...active, ...checked].find((i) => normaliseName(i.name) === normaliseName(display));
+    const optimisticId = existing ? existing.id : id;
+    if (existing) {
+      place({ ...existing, status: 'active', checked_at: null });
+    } else {
+      place(optimisticRow(id, display, note ?? null, new Date().toISOString()));
+    }
+    addPending(optimisticId);
     const op: Op = {
       opId: uuidv7(),
       kind: 'add',

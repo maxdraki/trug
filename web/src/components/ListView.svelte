@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { fly } from 'svelte/transition';
+  import { fly, slide } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import type { Item } from '../lib/types';
   import type { Store } from '../lib/store.svelte';
@@ -128,7 +128,10 @@
     </div>
 
     {#if store.checked.length}
-      <section class="checked">
+      <!-- Eased, not snapped. Emptying the basket removed ~80px of card in a
+           single frame while the rows above were still animating, which read as
+           the whole list lurching rather than one item moving. -->
+      <section class="checked" transition:slide={{ duration: d(DUR.slide) }}>
         <div class="checked-head">
           <h2>
             <span class="basket-ico"><Icon name="basket" size={18} stroke={1.75} /></span>

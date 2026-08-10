@@ -59,9 +59,7 @@ export function d(ms: number): number {
  * Normalised crossfade key for an item/catalogue name, matching the store's
  * own normalisation so a suggestion chip and its resulting aisle row pair up.
  */
-export function keyOf(name: string): string {
-  return name.toLowerCase().split(/\s+/).filter(Boolean).join(' ');
-}
+export { normaliseName as keyOf } from './text';
 
 /**
  * Hand-rolled crossfade pair for the add/check gestures: a chip (AddBar

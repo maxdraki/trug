@@ -3,9 +3,13 @@
 Start here:
 
 ```sh
-trug status                             # if you used the installer
-docker compose exec trug trug-doctor    # if you didn't
+trug status                             # if you used the installer — from anywhere
+docker compose exec trug trug-doctor    # if you didn't — from inside the clone
 ```
+
+The first works wherever you're standing; the second only works in a directory that has a
+`docker-compose.yml` in it. See [where you run these](operations.md#where-you-run-these) if that
+distinction is new.
 
 It catches most of what follows and tells you what to change. Exit `0` is healthy, `1` is
 warnings, `2` is broken. If it's clean and you're still stuck, find your symptom below.
@@ -22,7 +26,7 @@ warnings, `2` is broken. If it's clean and you're still stuck, find your symptom
 | The gate says an address "needs a name", on an `https://` LAN address | A proxy or certificate in front of a LAN IP. The connection is fine; the IP is the problem, and WebAuthn won't take one as an RP ID. | Give the box a name — `tailscale serve --bg 8000` is the quickest — then `trug set-origin` with the name it prints. `localhost` is no help here: on the phone, that's the phone. |
 | Passkey create or sign-in always fails, no error anywhere | `TRUG_RP_ID` / `TRUG_ORIGIN` don't match the URL in the browser | Set `TRUG_RP_ID` to the bare host and `TRUG_ORIGIN` to the exact origin — scheme, host, and port if it isn't standard. Restart. On Railway they must equal the generated domain. |
 | Everyone's passkeys stopped working at once | You changed `TRUG_RP_ID` | Credentials are bound to the hostname they were created under. Everyone re-enrols once against the new name. |
-| Bootstrap token gets a 403 | The instance is already claimed — bootstrap is one-time and first-user-only | Sign in with your passkey, or have an enrolled member send you an invite. If every device is lost: `trug-doctor recover --reset-bootstrap` re-opens the claim without deleting anything. |
+| Bootstrap token gets a 403 | The instance is already claimed — bootstrap is one-time and first-user-only | Sign in with your passkey, or have an enrolled member send you an invite. If every device is lost: `trug doctor recover --reset-bootstrap` re-opens the claim without deleting anything. |
 | Invite link says "invalid or expired" | Single-use, 24-hour TTL — already used, or old | Mint a fresh one: Settings → Members → "+ invite someone". |
 | Locked out entirely | — | Host access is the recovery credential. See [recovery](operations.md#recovery). |
 
@@ -30,10 +34,12 @@ warnings, `2` is broken. If it's clean and you're still stuck, find your symptom
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| `no configuration file provided: not found` | A bare `docker compose …` in a directory with no `docker-compose.yml`. The installer's lives in `~/.trug`, not wherever your shell happens to be. | Use the `trug` command, which already knows: `trug status`, `trug logs`, `trug doctor …`. Where there's no verb, name the directory — `docker compose --project-directory ~/.trug pull`. From a clone, `cd` into it first. |
+| `no such service: trug-doctor` | The service name got dropped. `trug` is the compose service; `trug-doctor` is the command inside it, and the line needs both. | `trug doctor recover --invite NAME` — or in full, from a clone, `docker compose exec trug trug-doctor recover --invite NAME`. |
 | `no matching manifest for linux/arm/v7` | The image is 64-bit only and you're on a 32-bit OS | Check with `uname -m`. `armv7l` means reflash with the 64-bit Raspberry Pi OS. |
 | `permission denied` talking to the Docker daemon | Your user isn't in the `docker` group | `sudo usermod -aG docker $USER`, then log out and back in. The group change doesn't apply to your current session. |
-| Compose errors on the `env_file` key | The `{ path, required }` long form needs Compose v2.24+ | Install Docker's own apt repo for a current Compose. Debian's `docker.io` plus standalone `docker-compose` v1 won't do. |
-| `docker compose up` takes several minutes | `build: .` is present, so it builds from source by default | `docker compose pull` first, or `up --pull always`. |
+| Compose errors on the `env_file` key | The `{ path, required }` long form needs Compose v2.24+. A clone only — the installer writes the short form for exactly this reason. | Install Docker's own apt repo for a current Compose. Debian's `docker.io` plus standalone `docker-compose` v1 won't do. |
+| `docker compose up` takes several minutes | `build: .` is present in the repo's compose file, so a clone builds from source by default. The installer's compose file has no `build:`, so this can't happen there. | In the clone, `docker compose pull` first, or `up --pull always`. |
 | The `./data` bind mount is denied on Docker Desktop | The clone is outside a shared path | Clone under your home directory, or add the path in Settings → Resources → File sharing. |
 | Container can't write the database | Rare — the entrypoint chowns the volume on boot | Confirm you haven't overridden the entrypoint, and that `./data` isn't mounted read-only. No manual `chown` should be needed. |
 | Trug doesn't come back after a reboot | Docker's own service isn't enabled | `sudo systemctl enable docker`. `restart: unless-stopped` can't help if Docker never starts. |
@@ -76,5 +82,6 @@ Run the doctor with `--redact`, which hides token values, and include the output
 [open an issue](https://github.com/maxdraki/trug/issues):
 
 ```sh
-docker compose exec trug trug-doctor --redact
+trug doctor --redact                             # installer, from anywhere
+docker compose exec trug trug-doctor --redact    # a clone, from inside it
 ```

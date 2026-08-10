@@ -130,6 +130,20 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   grep -q -- "--project-directory $HOME/.trug up -d" "$DOCKER_LOG"
 }
 
+@test "the closing message explains why localhost and the network differ" {
+  # The two addresses behave differently and the difference is not guessable:
+  # localhost prompts for a passkey and can create accounts; the network link
+  # skips passkeys entirely because browsers refuse to make one against an IP,
+  # and everyone on it shares a single identity.
+  run bash "$INSTALL"
+  [ "$status" -eq 0 ]
+  assert_contains "passkey" "$output"
+  assert_contains "localhost" "$output"
+  assert_contains "ONE identity" "$output"
+  # And the claim step names the affordance you actually have to click.
+  assert_contains "use an access token" "$output"
+}
+
 @test "a full install prints the share link, not a token to grep out of the logs" {
   run bash "$INSTALL"
   [ "$status" -eq 0 ]

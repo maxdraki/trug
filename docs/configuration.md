@@ -34,7 +34,7 @@ Set these two with `trug set-origin https://your-name` rather than by hand. It d
 from the origin, restarts, and runs the doctor on the result — and it refuses the four inputs that
 look fine and break passkeys anyway: a bare hostname, a plain-`http` origin, a URL with a path,
 and an IP address. Editing them yourself works too; see
-[remote access](remote-access.md#tell-trug-its-new-name), and run `trug-doctor` afterwards.
+[remote access](remote-access.md#tell-trug-its-new-name), and run the doctor afterwards.
 
 ### Tokens
 
@@ -72,9 +72,13 @@ leftmost value. Use `N` for `N` chained trusted proxies.
 Because the default is `0`, **a proxied deployment must set this**, or every request looks like it
 came from the proxy and the whole household shares one rate-limit bucket.
 
-While you're there, bind Trug to loopback so nobody can reach it around the proxy — there's a
-commented line in `docker-compose.yml`. A client that can hit the container directly can forge
-`X-Forwarded-For` freely.
+While you're there, bind Trug to loopback so nobody can reach it around the proxy — the repo's
+`docker-compose.yml` carries a commented line for it. A client that can hit the container directly
+can forge `X-Forwarded-For` freely.
+
+The installer's `~/.trug/docker-compose.yml` has no such line: put `127.0.0.1:` on the front of
+its `ports:` entry yourself, and expect to do it again after any installer re-run, which rewrites
+that file.
 
 ### Rate limiting
 
@@ -118,7 +122,7 @@ restart, and clearing it in the UI reverts to whatever is here.
 
 | Variable | Default | Notes |
 | --- | --- | --- |
-| `CLOUDFLARE_TUNNEL_TOKEN` | — | Only used by the commented `cloudflared` service in `docker-compose.yml`. |
+| `CLOUDFLARE_TUNNEL_TOKEN` | — | Only used by the commented `cloudflared` service in the repo's `docker-compose.yml`. |
 
 ## Using `config.yaml` instead
 
@@ -155,8 +159,8 @@ Environment variables still take precedence over anything in the file.
 ## Checking what's actually live
 
 ```sh
-trug status                             # if you used the installer
-docker compose exec trug trug-doctor    # if you didn't
+trug status                             # if you used the installer — from anywhere
+docker compose exec trug trug-doctor    # if you didn't — from inside the clone
 ```
 
 It prints the resolved configuration and the current tokens, and flags anything inconsistent.

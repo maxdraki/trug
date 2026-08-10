@@ -40,6 +40,9 @@ ${BOLD}trug${RESET} — a shared shopping list on your own machine
   ${BOLD}trug logs${RESET} [-f]              what the server is saying
   ${BOLD}trug share${RESET}                  a link and a QR for everyone else on the network
   ${BOLD}trug set-origin${RESET} <https-url> point trug at its new name, and check it took
+  ${BOLD}trug doctor${RESET} [args…]         run trug-doctor — diagnostics and lockout recovery
+
+Locked out? ${DIM}trug doctor recover --invite YOUR-NAME${RESET}
 
 Installed at ${DIM}${TRUG_HOME}${RESET}
 EOF
@@ -219,6 +222,28 @@ cmd_up()   { require_install; "${COMPOSE[@]}" up -d; }
 cmd_down() { require_install; "${COMPOSE[@]}" down; }
 cmd_logs() { require_install; "${COMPOSE[@]}" logs "$@"; }
 
+# Everything trug-doctor can do, from wherever you happen to be standing.
+#
+# The seventh verb, and it earns its place: trug-doctor is the lockout escape
+# hatch, and until this existed the documented recovery commands were
+# `docker compose exec trug trug-doctor recover …`, which only works if your
+# shell is sitting in the directory holding the compose file. After a one-line
+# install that directory is ~/.trug and nobody is in it, so the first thing
+# anyone locked out of their own instance met was
+# "no configuration file provided: not found".
+#
+# Arguments pass straight through, and so does the exit code (0 healthy,
+# 1 warnings, 2 broken).
+cmd_doctor() {
+  require_install
+  require_running
+  set +e
+  "${COMPOSE[@]}" exec -T trug trug-doctor "$@"
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
 cmd_status() {
   require_install
   "${COMPOSE[@]}" ps
@@ -388,6 +413,7 @@ case "${1:-}" in
   down)        shift; cmd_down "$@" ;;
   status)      shift; cmd_status "$@" ;;
   logs)        shift; cmd_logs "$@" ;;
+  doctor)      shift; cmd_doctor "$@" ;;
   share)       shift; cmd_share "$@" ;;
   set-origin)  shift; cmd_set_origin "$@" ;;
   -h|--help|help) usage ;;

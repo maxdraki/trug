@@ -133,8 +133,9 @@ can reach it around the proxy — see [configuration](configuration.md#behind-a-
 ### Cloudflare Tunnel
 
 No ports forwarded, no inbound firewall changes, and a public hostname with TLS terminated by
-Cloudflare. There's a commented `cloudflared` service in `docker-compose.yml` ready to uncomment:
-drop your tunnel token into `.env` as `CLOUDFLARE_TUNNEL_TOKEN` and point the tunnel at
+Cloudflare. The repo's `docker-compose.yml` has a commented `cloudflared` service ready to
+uncomment — the installer's `~/.trug` one doesn't, so this route means working from a clone.
+Drop your tunnel token into `.env` as `CLOUDFLARE_TUNNEL_TOKEN` and point the tunnel at
 `http://trug:8000` in the Cloudflare Zero Trust dashboard.
 
 This one does put your instance on the public internet, so set `TRUG_TRUSTED_PROXY_HOPS=1` and
@@ -166,11 +167,16 @@ TRUG_ORIGIN=https://trug.tail1234.ts.net   # the full origin, exactly as loaded
 TRUG_RP_ID=trug.tail1234.ts.net            # the bare host — no scheme, no port
 ```
 
-Then restart (`docker compose up -d`) and check it took:
+Then restart and check it took:
 
 ```sh
-docker compose exec trug trug-doctor
+trug up
+trug doctor
 ```
+
+From a clone, in the clone: `docker compose up -d`, then
+`docker compose exec trug trug-doctor`. Neither of those works from anywhere else — see
+[where you run these](operations.md#where-you-run-these).
 
 The doctor exists mostly for this. A mismatch here breaks every passkey ceremony with no error in
 the logs, the UI, or the healthcheck, so it's worth the ten seconds.
