@@ -2,7 +2,19 @@
   <img src="icon/trug-logo.svg" alt="Trug logo — a basket with a check mark" width="112">
 </p>
 
-<h1 align="center">Trug</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="icon/trug-wordmark-dark.svg">
+    <img src="icon/trug-wordmark.svg" alt="Trug" width="150">
+  </picture>
+</p>
+
+<p align="center">
+  <a href="https://github.com/maxdraki/trug/actions/workflows/ci.yml"><img src="https://github.com/maxdraki/trug/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI status"></a>
+  <a href="https://github.com/maxdraki/trug/releases/latest"><img src="https://img.shields.io/github/v/release/maxdraki/trug?color=a6e3a1&label=release" alt="Latest release"></a>
+  <a href="https://github.com/maxdraki/trug/pkgs/container/trug"><img src="https://img.shields.io/badge/ghcr.io-multi--arch%20image-89b4fa?logo=docker&logoColor=white" alt="Container image on GHCR"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/maxdraki/trug?color=cba6f7" alt="MIT licence"></a>
+</p>
 
 A self-hosted shared shopping list for one household. A phone each, an installable PWA,
 and a single SQLite file behind a FastAPI server — no cloud account, no subscription, no

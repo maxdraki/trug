@@ -2,7 +2,22 @@ name: CI
 
 on:
   push:
+    # Every branch, no tags. A release tag points at a commit main has already
+    # tested, so without this the whole suite runs twice on the identical SHA.
+    # Note: this must be `branches`, not `tags-ignore` — a push filter that
+    # names only tag criteria excludes branch pushes altogether, which silently
+    # switches CI off.
+    branches: ["**"]
   pull_request:
+
+# Least privilege: nothing here writes to the repo.
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   server:
@@ -63,3 +78,87 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  generated:
+    name: generated artifacts up to date (icons + theme)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    # icons.ts (parsed from server/trug/icons.py + @tabler/icons) and theme.css
+    # (from @catppuccin/palette) are committed generated artifacts. Regenerate
+    # them and fail if the committed copies drifted — catches a forgotten
+    # `gen-icons`/`gen-theme` after an icon-map edit or a Tabler/Catppuccin bump.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Regenerate theme + icons from source
+        run: |
+          npm run gen-theme
+          npm run gen-icons
+
+      - name: Fail if committed artifacts drifted
+        run: |
+          git diff --exit-code -- src/theme.css src/lib/icons.ts \
+            || { echo "::error::src/theme.css or src/lib/icons.ts is stale — run 'npm run gen-theme && npm run gen-icons' in web/ and commit."; exit 1; }
+
+  docker:
+    name: docker image builds and boots
+    runs-on: ubuntu-latest
+    # `docker compose up` is the primary install path, but the image was
+    # previously first built during release.yml — i.e. a broken Dockerfile
+    # was only discovered by a self-hoster pulling :latest. Build it on every
+    # change and prove the container actually serves.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (amd64, loaded into the local daemon)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: trug:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot the container and smoke-test it
+        # No env is required: on first run trug generates its own tokens and
+        # SQLite file. Asserts the three things a self-hoster needs on day one
+        # — the API answers, the PWA is served, and the recovery CLI exists.
+        run: |
+          docker run -d --name trug-ci -p 8000:8000 trug:ci
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8000/healthz >/dev/null 2>&1; then
+              echo "healthz OK after ${i}s"; break
+            fi
+            if [ "$i" = "60" ]; then echo "::error::container never became healthy"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:8000/ | grep -q "<title>Trug</title>" \
+            || { echo "::error::SPA not served at /"; exit 1; }
+          # trug-doctor exits non-zero on warnings (expected in a bare
+          # container with no TRUG_ORIGIN), so assert it emits valid JSON
+          # rather than a clean exit — this proves the console script shipped.
+          docker exec trug-ci /app/.venv/bin/trug-doctor --json --redact \
+            | python3 -c "import json,sys; json.load(sys.stdin)['status']" \
+            || { echo "::error::trug-doctor missing or not emitting valid JSON"; exit 1; }
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker logs trug-ci || true
