@@ -231,7 +231,16 @@ jobs:
         # checked as `sh` rather than under shellcheck's bash default — which
         # would happily accept bashisms the installer must not contain.
         # bin/trug is bash, and its shebang says so.
+        #
+        # Pinned rather than taking the runner's: which checks fire varies by
+        # version in both directions, so an unpinned lint is a check that can
+        # start failing on a commit that changed nothing, and can pass locally
+        # while failing here. Bump this deliberately.
+        env:
+          SHELLCHECK_VERSION: v0.10.0
         run: |
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
+            | sudo tar -xJf - --strip-components=1 -C /usr/local/bin "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
           shellcheck --version
           shellcheck -s sh install.sh
           shellcheck bin/trug

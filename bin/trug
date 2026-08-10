@@ -46,10 +46,14 @@ EOF
 }
 
 require_install() {
-  [ -f "$TRUG_HOME/.env" ] && [ -f "$TRUG_HOME/docker-compose.yml" ] || die \
-    "No trug install found at $TRUG_HOME." \
-    "Install one with:" \
-    "  curl -fsSL https://raw.githubusercontent.com/maxdraki/trug/main/install.sh | sh"
+  # An `if`, not `A && B || C`: that reads as if-then-else and isn't one — C
+  # runs whenever the whole conjunction is false, which is right here but is a
+  # trap the next edit would fall into.
+  if [ ! -f "$TRUG_HOME/.env" ] || [ ! -f "$TRUG_HOME/docker-compose.yml" ]; then
+    die "No trug install found at $TRUG_HOME." \
+      "Install one with:" \
+      "  curl -fsSL https://raw.githubusercontent.com/maxdraki/trug/main/install.sh | sh"
+  fi
 }
 
 # Mirrors install.sh's env_value. Kept separate on purpose: install.sh is piped
