@@ -23,8 +23,9 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   lib
   for _ in 1 2 3 4 5; do
     tok="$(gen_token)"
-    [ "${#tok}" -eq 32 ]
-    [[ "$tok" =~ ^[A-Za-z0-9]{32}$ ]]
+    # A function, not a bare `[[ ]]`: inside this loop a `[[ ]]` is never the
+    # test's final command, and bats 1.14 does not fail the test for one.
+    assert_token_shape "$tok"
   done
 }
 
@@ -132,8 +133,10 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
 @test "a full install prints the share link, not a token to grep out of the logs" {
   run bash "$INSTALL"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"trug share"* ]]
-  [[ "$output" != *"docker compose logs"* ]]
+  assert_contains "trug share" "$output"
+  # The real shape is `docker compose --project-directory <path> logs …`, so
+  # the contiguous "docker compose logs" could never match.
+  refute_contains "logs --tail" "$output"
 }
 
 @test "re-running is a repair, not a reinstall: data and tokens survive" {
@@ -153,7 +156,7 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   export DOCKER_STUB_IMAGE_LOCAL=yes
   run bash "$INSTALL"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already on this machine"* ]]
+  assert_contains "already on this machine" "$output"
   grep -q -- "--project-directory $HOME/.trug up -d" "$DOCKER_LOG"
 }
 
@@ -162,7 +165,7 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   export DOCKER_STUB_IMAGE_LOCAL=no
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Couldn't pull the image"* ]]
+  assert_contains "Couldn't pull the image" "$output"
   run grep -q -- "--project-directory $HOME/.trug up -d" "$DOCKER_LOG"
   [ "$status" -ne 0 ]
 }
@@ -171,9 +174,9 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   hide_command docker
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Docker Desktop"* ]]
-  [[ "$output" == *"OrbStack"* ]]
-  [[ "$output" == *"Colima"* ]]
+  assert_contains "Docker Desktop" "$output"
+  assert_contains "OrbStack" "$output"
+  assert_contains "Colima" "$output"
   [ ! -d "$HOME/.trug" ]
 }
 
@@ -181,7 +184,8 @@ lib() { TRUG_LIB_ONLY=1 . "$INSTALL"; }
   export DOCKER_STUB_MODE=daemon-down
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not running"* ]] || [[ "$output" == *"isn't running"* ]]
+  assert_contains "isn't running" "$output"
+  assert_contains "Start Docker Desktop" "$output"
 }
 
 @test "32-bit Raspberry Pi OS: names the cause before the pull fails on it" {
@@ -193,7 +197,7 @@ STUB
   chmod +x "$STUB_BIN/uname"
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"64-bit"* ]]
+  assert_contains "64-bit" "$output"
 }
 
 @test "never blocks on stdin, because curl | sh has none to read" {
@@ -219,8 +223,8 @@ STUB
   chmod +x "$STUB_BIN/docker"
   run bash -c "cat '$INSTALL' | bash"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"syntax error"* ]]
-  [[ "$output" != *"unexpected"* ]]
+  refute_contains "syntax error" "$output"
+  refute_contains "unexpected" "$output"
   # The assertions that matter. An earlier attempt at this fixed the stdin
   # problem with `exec 0</dev/null`, which discards the very pipe the shell is
   # reading the script from: bash then exits 0 having done nothing at all, and
@@ -228,7 +232,7 @@ STUB
   # syntax error passes for a total silent no-op.
   [ -f "$HOME/.trug/.env" ]
   [ -x "$HOME/.local/bin/trug" ]
-  [[ "$output" == *"trug is up"* ]]
+  assert_contains "trug is up" "$output"
 }
 
 @test "the piped install works under every shell someone might have as /bin/sh" {
@@ -341,7 +345,11 @@ STUB
 @test ".env is never briefly world-readable" {
   run bash "$INSTALL"
   [ "$status" -eq 0 ]
-  perms="$(stat -f '%Lp' "$HOME/.trug/.env" 2>/dev/null || stat -c '%a' "$HOME/.trug/.env")"
+  # GNU first: on GNU coreutils `-f` means --file-system and reads its argument
+  # as a path, so `stat -f '%Lp' file` "succeeds" with unrelated output and the
+  # BSD fallback never runs. BSD/macOS rejects `-c` outright, so this order
+  # works on both.
+  perms="$(stat -c '%a' "$HOME/.trug/.env" 2>/dev/null || stat -f '%Lp' "$HOME/.trug/.env")"
   [ "$perms" = "600" ]
 }
 
@@ -355,15 +363,19 @@ STUB
   chmod +x "$STUB_BIN/tr"
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"random token"* ]]
+  assert_contains "random token" "$output"
 }
 
 @test "no curl: says so up front instead of blaming the port 90 seconds later" {
   hide_command curl
   run bash "$INSTALL"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"curl"* ]]
-  [[ "$output" != *"never answered"* ]]
+  # Pinned to the preflight's own message. "curl" alone also matches the
+  # health-timeout die (it prints a `curl … | TRUG_PORT=8080 sh` retry line),
+  # and "never answered" appears nowhere — so the old pair passed even with the
+  # preflight deleted, which is the one thing this test exists to protect.
+  assert_contains "curl isn't installed" "$output"
+  refute_contains "didn't answer on port" "$output"
 }
 
 @test "an update run doesn't tell an established household to paste a dead token" {
@@ -376,8 +388,8 @@ STUB
 
   run bash "$INSTALL"
   [ "$status" -eq 0 ]
-  [[ "$output" != *"$boot"* ]]
-  [[ "$output" == *"sign in with your passkey"* ]]
+  refute_contains "$boot" "$output"
+  assert_contains "sign in with your passkey" "$output"
 }
 
 @test "the PATH block is marked and written at most once" {
@@ -396,6 +408,9 @@ STUB
   [ "$status" -ne 0 ]
   # Points at `docker compose … logs`, not `trug logs`: the CLI is installed in
   # the step after this one, so it does not exist yet when this fires.
-  [[ "$output" == *"logs --tail"* ]]
-  [[ "$output" != *"trug logs"* ]]
+  assert_contains "logs --tail" "$output"
+  # Not the `trug` CLI: it is installed in the step after this one, so it does
+  # not exist yet. Matched with the backticks, because the compose command it
+  # DOES print ends "…/.trug logs --tail 40" — which contains "trug logs".
+  refute_contains '`trug logs`' "$output"
 }

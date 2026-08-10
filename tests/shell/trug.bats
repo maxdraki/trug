@@ -27,27 +27,27 @@ teardown() { teardown_sandbox; }
   esac
   run /bin/bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" == *"?token="* ]]
+  assert_contains "?token=" "$output"
 }
 
 @test "no arguments: prints usage and fails, rather than guessing a verb" {
   run bash "$TRUG"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"share"* ]]
-  [[ "$output" == *"set-origin"* ]]
+  assert_contains "share" "$output"
+  assert_contains "set-origin" "$output"
 }
 
 @test "unknown verb: names it instead of a generic usage dump" {
   run bash "$TRUG" frobnicate
   [ "$status" -ne 0 ]
-  [[ "$output" == *"frobnicate"* ]]
+  assert_contains "frobnicate" "$output"
 }
 
 @test "not installed: points at the installer instead of a confusing compose error" {
   rm -rf "$HOME/.trug"
   run bash "$TRUG" status
   [ "$status" -ne 0 ]
-  [[ "$output" == *"install.sh"* ]]
+  assert_contains "install.sh" "$output"
 }
 
 @test "up / down / logs pass through to compose in the right directory" {
@@ -63,8 +63,7 @@ teardown() { teardown_sandbox; }
 @test "share: prints the LAN URL carrying the MCP token" {
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" == *"?token=mcptokenmcptokenmcptokenmcptoke1"* ]]
-  [[ "$output" == *":8000/"* ]]
+  assert_contains "http://192.168.1.42:8000/?token=mcptokenmcptokenmcptokenmcptoke1" "$output"
 }
 
 @test "share: a duplicated key in .env doesn't put a newline in the link" {
@@ -77,12 +76,12 @@ teardown() { teardown_sandbox; }
   [ "$status" -eq 0 ]
   url="$(printf '%s\n' "$output" | grep -o 'http://[^ ]*?token=[^ ]*')"
   [ "$(printf '%s\n' "$url" | wc -l | tr -d ' ')" = "1" ]
-  [[ "$url" != *"mcptokenmcptokenmcptokenmcptoke1secondvalue"* ]]
+  refute_contains "mcptokenmcptokenmcptokenmcptoke1secondvalue" "$url"
 }
 
 @test "share: never prints the bootstrap token, which is a different power" {
   run bash "$TRUG" share
-  [[ "$output" != *"boottokenboottokenboottokenboot1"* ]]
+  refute_contains "boottokenboottokenboottokenboot1" "$output"
 }
 
 @test "share: warns that ufw is NOT protecting this port, and never says to allow it" {
@@ -102,10 +101,10 @@ STUB
   chmod +x "$STUB_BIN/uname" "$STUB_BIN/systemctl"
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" == *"not protecting this port"* ]]
-  [[ "$output" == *"DOCKER-USER"* ]]
+  assert_contains "not protecting this port" "$output"
+  assert_contains "DOCKER-USER" "$output"
   # The advice that was shipped and was wrong.
-  [[ "$output" != *"ufw allow"* ]]
+  refute_contains "ufw allow" "$output"
 }
 
 @test "share: stays quiet about firewalls when none is running" {
@@ -121,8 +120,8 @@ STUB
   chmod +x "$STUB_BIN/uname" "$STUB_BIN/systemctl"
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" != *"ufw"* ]]
-  [[ "$output" != *"firewall-cmd"* ]]
+  refute_contains "ufw" "$output"
+  refute_contains "firewall-cmd" "$output"
 }
 
 @test "share: prefers a real LAN address over a VPN or a docker bridge" {
@@ -147,29 +146,28 @@ STUB
   chmod +x "$STUB_BIN/ipconfig" "$STUB_BIN/ip"
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" == *"http://192.168.1.42:8000/"* ]]
-  [[ "$output" != *"100.101.102.103"* ]]
-  [[ "$output" != *"172.17.0.1"* ]]
+  assert_contains "http://192.168.1.42:8000/" "$output"
+  refute_contains "100.101.102.103" "$output"
+  refute_contains "172.17.0.1" "$output"
 }
 
 @test "share: says 'this network', because a laptop travels" {
   run bash "$TRUG" share
-  [[ "$output" == *"this network"* ]]
-  [[ "$output" != *"your wifi"* ]]
+  assert_contains "Anyone on this network" "$output"
 }
 
 @test "share: renders the QR when the terminal has room" {
   export COLUMNS=100
   run bash "$TRUG" share
-  [[ "$output" == *"[QR-BLOCK]"* ]]
+  assert_contains "[QR-BLOCK]" "$output"
 }
 
 @test "share: a narrow terminal gets the plain URL, not a wrapped QR" {
   export DOCKER_STUB_QR=too-narrow
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" != *"[QR-BLOCK]"* ]]
-  [[ "$output" == *"?token="* ]]
+  refute_contains "[QR-BLOCK]" "$output"
+  assert_contains "?token=" "$output"
 }
 
 @test "share: an image too old to render a QR doesn't spill a python error" {
@@ -178,9 +176,9 @@ STUB
   export DOCKER_STUB_QR=no-module
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
-  [[ "$output" == *"?token="* ]]
-  [[ "$output" != *"No module named"* ]]
-  [[ "$output" != *"Traceback"* ]]
+  assert_contains "?token=" "$output"
+  refute_contains "No module named" "$output"
+  refute_contains "Traceback" "$output"
 }
 
 @test "share: a stopped container is refused before any link is printed" {
@@ -190,8 +188,8 @@ STUB
   export DOCKER_STUB_RUNNING=no
   run bash "$TRUG" share
   [ "$status" -ne 0 ]
-  [[ "$output" == *"trug up"* ]]
-  [[ "$output" != *"?token="* ]]
+  assert_contains "trug up" "$output"
+  refute_contains "?token=" "$output"
 }
 
 @test "set-origin: writes the origin and derives a bare-host RP ID" {
@@ -217,7 +215,7 @@ STUB
 @test "set-origin: refuses an IP, which WebAuthn will not accept as an RP ID" {
   run bash "$TRUG" set-origin https://192.168.1.5:8000
   [ "$status" -ne 0 ]
-  [[ "$output" == *"name"* ]]
+  assert_contains "WebAuthn won't accept an IP address" "$output"
 }
 
 @test "set-origin: refuses a URL with a path rather than silently trimming it" {
@@ -234,7 +232,7 @@ STUB
 
 @test "set-origin: warns that existing passkeys stop working" {
   run bash "$TRUG" set-origin https://trug.tail1234.ts.net
-  [[ "$output" == *"passkey"* ]]
+  assert_contains "create their passkey again" "$output"
 }
 
 @test "set-origin: a failing doctor is surfaced, not swallowed" {
@@ -250,23 +248,23 @@ STUB
   export DOCKER_STUB_RUNNING=no
   run bash "$TRUG" status
   [ "$status" -ne 0 ]
-  [[ "$output" == *"isn't running"* ]]
-  [[ "$output" == *"trug logs"* ]]
+  assert_contains "isn't running" "$output"
+  assert_contains "trug logs   to see why" "$output"
 }
 
 @test "set-origin: a container that didn't come back up isn't blamed on the doctor" {
   export DOCKER_STUB_RUNNING=no
   run bash "$TRUG" set-origin https://trug.tail1234.ts.net
   [ "$status" -ne 0 ]
-  [[ "$output" == *"isn't running"* ]]
-  [[ "$output" != *"doctor is not happy"* ]]
+  assert_contains "isn't running" "$output"
+  refute_contains "doctor is not happy" "$output"
 }
 
 @test "set-origin: refuses a bracketed IPv6 literal instead of writing '[' as the RP ID" {
   run bash "$TRUG" set-origin "https://[::1]:8000"
   [ "$status" -ne 0 ]
   run grep '^TRUG_RP_ID=' "$HOME/.trug/.env"
-  [[ "$output" == "TRUG_RP_ID=localhost" ]]
+  [ "$output" = "TRUG_RP_ID=localhost" ]
 }
 
 @test "set-origin: refuses credentials embedded in the URL" {
@@ -277,10 +275,13 @@ STUB
 @test "set-origin: refuses a dotless host, which browsers reject as an RP ID" {
   run bash "$TRUG" set-origin "https://trugbox"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no dot"* ]]
+  assert_contains "no dot" "$output"
 }
 
 @test "set-origin: an unwritable .env fails loudly and changes nothing" {
+  # Root ignores the permission bits, so this can only be tested as a normal
+  # user — which is everyone running trug, but not a root container.
+  [ "$(id -u)" -ne 0 ] || skip "running as root: file permissions are not enforced"
   chmod 500 "$HOME/.trug"
   run bash "$TRUG" set-origin https://trug.tail1234.ts.net
   chmod 700 "$HOME/.trug"

@@ -23,6 +23,17 @@ setup_sandbox() {
   # the production health-wait. Individual tests override when that IS the point.
   export TRUG_HEALTH_TIMEOUT=3
   export TRUG_LOCAL_SRC="$REPO_ROOT"
+  # On a Mac that actually has Docker Desktop installed, the daemon-down test
+  # would otherwise launch it for real and then spin for a minute.
+  export TRUG_DOCKER_START_TIMEOUT=1
+  stub_network
+  # …and `open -a Docker` must not reach the real one either.
+  cat >"$STUB_BIN/open" <<'STUB'
+#!/usr/bin/env bash
+echo "open $*" >>"$DOCKER_LOG"
+exit 0
+STUB
+  chmod +x "$STUB_BIN/open"
 }
 
 teardown_sandbox() {
@@ -83,14 +94,77 @@ STUB
   chmod +x "$STUB_BIN/docker"
 }
 
+# A fixed LAN address, so `trug share` is deterministic everywhere.
+#
+# Without this the tests depend on the host having a discoverable address:
+# a Mac answers from `ipconfig`, a GitHub runner from `ip`, and a slim container
+# with no iproute2 answers not at all — so `share` died and half a dozen tests
+# failed for a reason that had nothing to do with what they were testing.
+STUB_LAN_IP=192.168.1.42
+
+stub_network() {
+  cat >"$STUB_BIN/ipconfig" <<STUB
+#!/usr/bin/env bash
+[ "\$1" = "getifaddr" ] && { echo "$STUB_LAN_IP"; exit 0; }
+exit 1
+STUB
+  cat >"$STUB_BIN/ip" <<STUB
+#!/usr/bin/env bash
+for a in "\$@"; do
+  [ "\$a" = "addr" ] && { echo "2: eth0    inet $STUB_LAN_IP/24 scope global eth0"; exit 0; }
+done
+echo "1.1.1.1 dev eth0 src $STUB_LAN_IP"
+STUB
+  chmod +x "$STUB_BIN/ipconfig" "$STUB_BIN/ip"
+}
+
 # Stand in for the health probe so tests never wait on a real port.
 stub_curl() {
   cat >"$STUB_BIN/curl" <<'STUB'
 #!/usr/bin/env bash
 echo "curl $*" >>"$DOCKER_LOG"
+# `curl --version` is the installer's preflight probe for curl being usable at
+# all. It must keep succeeding when CURL_STUB_EXIT is set to break the health
+# probe, or the test silently exercises "curl is missing" instead of "trug never
+# answered" — which is exactly what it did.
+for a in "$@"; do
+  [ "$a" = "--version" ] && { echo "curl 8.5.0 (stub)"; exit 0; }
+done
 exit "${CURL_STUB_EXIT:-0}"
 STUB
   chmod +x "$STUB_BIN/curl"
+}
+
+# --- assertions --------------------------------------------------------------
+#
+# Use these rather than a bare `[[ "$output" == *x* ]]` on its own line. bats
+# 1.14 does NOT fail a test when a `[[ ]]` compound command returns non-zero
+# anywhere but the final line — 1.10 does — so a bare one is an assertion that
+# is enforced on CI and ignored on a Mac. These are plain functions, so their
+# failure is caught by every version, and they say what they expected.
+
+assert_contains() { # assert_contains <needle> <haystack>
+  case "$2" in
+    *"$1"*) return 0 ;;
+    *) printf 'expected output to contain: %s\n--- actual ---\n%s\n' "$1" "$2" >&2; return 1 ;;
+  esac
+}
+
+assert_token_shape() { # assert_token_shape <value>
+  case "$1" in
+    ????????????????????????????????) ;;
+    *) printf 'expected 32 characters, got %s: %s\n' "${#1}" "$1" >&2; return 1 ;;
+  esac
+  case "$1" in
+    *[!A-Za-z0-9]*) printf 'expected alphanumeric only: %s\n' "$1" >&2; return 1 ;;
+  esac
+}
+
+refute_contains() { # refute_contains <needle> <haystack>
+  case "$2" in
+    *"$1"*) printf 'expected output NOT to contain: %s\n--- actual ---\n%s\n' "$1" "$2" >&2; return 1 ;;
+    *) return 0 ;;
+  esac
 }
 
 # Remove a command from PATH for the duration of a test by shadowing it with a

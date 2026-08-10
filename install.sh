@@ -44,6 +44,10 @@ if [ -n "${TRUG_PORT:-}" ]; then PORT_EXPLICIT=1; else PORT_EXPLICIT=0; fi
 TRUG_PORT="${TRUG_PORT:-8000}"
 TRUG_REF="${TRUG_REF:-main}"
 TRUG_HEALTH_TIMEOUT="${TRUG_HEALTH_TIMEOUT:-90}"
+# How long to wait for a Docker Desktop we started ourselves. Overridable only
+# so the test suite doesn't sit through it on a machine that has Docker Desktop
+# installed but stopped.
+TRUG_DOCKER_START_TIMEOUT="${TRUG_DOCKER_START_TIMEOUT:-60}"
 RAW_BASE="https://raw.githubusercontent.com/maxdraki/trug/${TRUG_REF}"
 # Overridable so you can run an image you built or mirrored yourself. It is also
 # what lets CI test the commit in front of it: the published :latest tag pulls
@@ -429,7 +433,7 @@ if ! docker info >/dev/null 2>&1 </dev/null; then
     warn "Docker is installed but not running — starting Docker Desktop"
     open -a Docker >/dev/null 2>&1 </dev/null || true
     waited=0
-    while [ "$waited" -lt 60 ]; do
+    while [ "$waited" -lt "$TRUG_DOCKER_START_TIMEOUT" ]; do
       docker info >/dev/null 2>&1 </dev/null && break
       sleep 2
       waited=$((waited + 2))
