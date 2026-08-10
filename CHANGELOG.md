@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-08-10
+
+### Fixed
+
+- A newly deployed Trug greeted its very first visitor with "welcome back" and
+  a sign-in button that could not work — no account exists yet — while the one
+  thing that does work, pasting the bootstrap token, was hidden behind a
+  fallback link. A fresh instance now says it hasn't been claimed, leads with
+  the bootstrap-token field, and tells you where to find the token (Railway
+  Variables tab, or the container logs on first boot).
+- Lockout recovery (`trug-doctor recover --reset-bootstrap`) re-opens the
+  first-account claim, but the app still reported the instance as claimed and
+  hid this onboarding — precisely when you need it. It now agrees with the
+  server.
+- Clearer errors while claiming: a mistyped bootstrap token said "this instance
+  was just claimed by someone else" (whose suggested recoveries are impossible
+  on an unclaimed instance), and a throttled or unavailable server could report
+  a perfectly good token as invalid. Both now say what actually went wrong.
+
 ## [0.1.3] - 2026-08-09
 
 ### Added
@@ -75,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/maxdraki/trug/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/maxdraki/trug/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/maxdraki/trug/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/maxdraki/trug/compare/v0.1.0...v0.1.1

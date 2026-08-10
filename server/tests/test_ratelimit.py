@@ -309,3 +309,40 @@ def test_trusted_proxy_hops_defaults_to_zero():
 def test_negative_trusted_proxy_hops_rejected():
     with pytest.raises(ValueError):
         Settings.load({"TRUG_TRUSTED_PROXY_HOPS": "-1"}, None)
+
+
+def test_bootstrap_state_probe_has_its_own_bucket_and_never_starves_the_claim():
+    """The gate probes /bootstrap/state on every load to decide whether to show
+    the first-run onboarding. That must NOT share the claim bucket: a handful of
+    page reloads would otherwise exhaust AUTH_LIMIT and 429 the very claim the
+    onboarding is inviting — locking a new deployer out of their own instance."""
+    from trug.ratelimit import AUTH_LIMIT
+
+    app = _app()
+    client = TestClient(app)
+
+    # Burn well past the claim budget on the probe alone.
+    for _ in range(AUTH_LIMIT * 2):
+        assert client.get("/auth/bootstrap/state").status_code == 200
+
+    # The claim is still reachable — it has its own untouched budget.
+    r = client.post(
+        "/auth/bootstrap/claim/options",
+        json={"name": "Alice"},
+        headers={"authorization": "Bearer boot-secret"},
+    )
+    assert r.status_code != 429
+
+
+def test_bootstrap_state_probe_is_itself_bounded():
+    """It is unauthenticated, so it still gets a (generous) ceiling rather than
+    being a free unlimited endpoint."""
+    from trug.ratelimit import PROBE_LIMIT
+
+    client = TestClient(_app())
+    statuses = [
+        client.get("/auth/bootstrap/state").status_code
+        for _ in range(PROBE_LIMIT + 5)
+    ]
+    assert all(s == 200 for s in statuses[:PROBE_LIMIT])
+    assert statuses[-1] == 429

@@ -40,6 +40,7 @@ from trug.auth import (
 )
 from trug.ratelimit import (
     bootstrap_rate_limit,
+    bootstrap_state_rate_limit,
     login_rate_limit,
     register_rate_limit,
 )
@@ -246,11 +247,20 @@ def _require_bootstrap(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Invalid bootstrap token")
 
 
-@router.get("/bootstrap/state")
+@router.get("/bootstrap/state", dependencies=[bootstrap_state_rate_limit])
 def bootstrap_state(request: Request):
-    """Unauthenticated probe for the gate: is this instance still claimable
-    (zero users)? Reveals only whether any account exists, never the token."""
-    return {"claimable": request.app.state.auth_repo.user_count() == 0}
+    """Unauthenticated probe for the gate: is this instance still claimable?
+    Reveals only whether the claim is open, never the token.
+
+    This must agree with ``_require_bootstrap`` — including the recovery reopen
+    — or the gate misreports. A locked-out operator who runs
+    ``recover --reset-bootstrap`` still has users on the roster, so a bare
+    ``user_count() == 0`` would say "claimed" while the claim endpoints were in
+    fact open, hiding the first-run onboarding at the exact moment it is needed.
+    """
+    auth_repo = request.app.state.auth_repo
+    claimable = auth_repo.user_count() == 0 or auth_repo.bootstrap_reopen_active()
+    return {"claimable": claimable}
 
 
 @router.post(

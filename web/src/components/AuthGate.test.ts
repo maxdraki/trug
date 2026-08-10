@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import AuthGate from './AuthGate.svelte';
+import { ApiError } from '../lib/api';
 import { writeSnapshot, hasSnapshot, clearSnapshot } from '../lib/snapshot';
 import type { Item } from '../lib/types';
 
@@ -25,6 +26,16 @@ const bootstrapClaimOptions = vi.fn();
 const bootstrapClaimVerify = vi.fn();
 
 vi.mock('../lib/api', () => ({
+  // Defined inline: vi.mock's factory is hoisted, so it cannot close over a
+  // top-level declaration (same shape as App.test.ts).
+  ApiError: class ApiError extends Error {
+    constructor(
+      public status: number,
+      message: string,
+    ) {
+      super(message);
+    }
+  },
   getToken: (...a: unknown[]) => getToken(...a),
   setToken: (...a: unknown[]) => setToken(...a),
   clearToken: (...a: unknown[]) => clearToken(...a),
@@ -235,15 +246,19 @@ describe('AuthGate', () => {
     bootstrapState.mockResolvedValue({ claimable: true });
     render(AuthGate, { children: noopChildren, initialSupported: false });
 
-    const input = await screen.findByLabelText('Access token');
+    // Unclaimed instance, so the gate leads with the bootstrap-token field —
+    // but a valid machine token pasted into it must still just sign in.
+    const input = await screen.findByLabelText('Bootstrap token');
     await fireEvent.input(input, { target: { value: 'machine-tok' } });
     await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
 
     await waitFor(() => expect(setToken).toHaveBeenCalledWith('machine-tok'));
-    await waitFor(() => expect(screen.queryByLabelText('Access token')).toBeNull());
-    // Never diverted to the first-account claim panel, never even probed it.
+    await waitFor(() => expect(screen.queryByLabelText('Bootstrap token')).toBeNull());
+    // Never diverted to the first-account claim panel. The gate probes
+    // claimability once at boot; the point is that submitToken did NOT probe
+    // again — a valid token short-circuits before the claim divert.
     expect(screen.queryByLabelText('Your name')).toBeNull();
-    expect(bootstrapState).not.toHaveBeenCalled();
+    expect(bootstrapState).toHaveBeenCalledTimes(1);
   });
 
   it('surfaces "invalid token" for a confirmed-rejected token on an already-claimed instance', async () => {
@@ -274,9 +289,9 @@ describe('AuthGate', () => {
 
     render(AuthGate, { children: noopChildren, initialSupported: true });
 
-    // Reveal the token field, then paste the bootstrap token.
-    await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
-    const input = await screen.findByLabelText('Access token');
+    // The unclaimed gate offers the field up front — no "use an access token"
+    // reveal needed, which is the whole point of the first-run treatment.
+    const input = await screen.findByLabelText('Bootstrap token');
     await fireEvent.input(input, { target: { value: 'boot-secret' } });
     await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
 
@@ -303,6 +318,8 @@ describe('AuthGate', () => {
 
     render(AuthGate, { children: noopChildren, initialSupported: true });
 
+    // Claimed instance (the default), so this is the ordinary hidden-fallback
+    // token path — the reveal link, and an "access token" label.
     await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
     const input = await screen.findByLabelText('Access token');
     await fireEvent.input(input, { target: { value: 'boot-secret' } });
@@ -310,15 +327,20 @@ describe('AuthGate', () => {
 
     const alert = await screen.findByRole('alert');
     expect(alert.textContent).toMatch(/couldn't reach the server/i);
-    // Never even probed claimability, and never diverted into the claim panel.
-    expect(bootstrapState).not.toHaveBeenCalled();
+    // Only the boot probe ran: an unreachable server must not be turned into a
+    // claimability question, and must never divert into the claim panel.
+    expect(bootstrapState).toHaveBeenCalledTimes(1);
     expect(alert.textContent).not.toMatch(/wasn't accepted/i);
     expect(screen.queryByLabelText('Your name')).toBeNull();
   });
 
   it('first-run: an already-claimed 403 mid-ceremony drops back to the normal gate', async () => {
     probeToken.mockResolvedValue('lost');
-    bootstrapState.mockResolvedValue({ claimable: true });
+    // Models the race honestly: claimable at boot, then someone else claims it
+    // mid-ceremony, so the re-probe after the 403 reports it gone.
+    bootstrapState
+      .mockResolvedValueOnce({ claimable: true })
+      .mockResolvedValue({ claimable: false });
     bootstrapClaimOptions.mockResolvedValue({ challenge: 'c' });
     performRegistration.mockResolvedValue({ id: 'cred' });
     bootstrapClaimVerify.mockRejectedValue(
@@ -327,8 +349,7 @@ describe('AuthGate', () => {
 
     render(AuthGate, { children: noopChildren, initialSupported: true });
 
-    await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
-    const input = await screen.findByLabelText('Access token');
+    const input = await screen.findByLabelText('Bootstrap token');
     await fireEvent.input(input, { target: { value: 'boot-secret' } });
     await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
 
@@ -350,8 +371,7 @@ describe('AuthGate', () => {
 
     render(AuthGate, { children: noopChildren, initialSupported: true });
 
-    await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
-    const input = await screen.findByLabelText('Access token');
+    const input = await screen.findByLabelText('Bootstrap token');
     await fireEvent.input(input, { target: { value: 'boot-secret' } });
     await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
 
@@ -492,5 +512,217 @@ describe('AuthGate', () => {
       await waitFor(() => expect(probeAuthStatus).toHaveBeenCalled());
       expect(assign).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// First run: a freshly deployed, unclaimed instance
+// ---------------------------------------------------------------------------
+
+describe('AuthGate — unclaimed instance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    getToken.mockReturnValue(null);
+    hasCookieSession.mockResolvedValue(false);
+    probeAuthStatus.mockResolvedValue('lost');
+    probeToken.mockResolvedValue('lost');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: true });
+  });
+
+  it('greets a brand-new deployer instead of saying "welcome back"', async () => {
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    expect(await screen.findByText(/hasn't been claimed yet/i)).toBeTruthy();
+    expect(screen.queryByText(/welcome back/i)).toBeNull();
+  });
+
+  it('leads with the bootstrap token field and drops the sign-in button that cannot work', async () => {
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    // The one action that can succeed is present up front, not behind a link…
+    expect(await screen.findByLabelText(/bootstrap token/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /use an access token/i })).toBeNull();
+    // …and the impossible one is gone (no account exists to sign in to).
+    expect(screen.queryByRole('button', { name: /^sign in$/i })).toBeNull();
+  });
+
+  it('tells the deployer where to find the token', async () => {
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    // Scoped to the <code> element: the surrounding <p> also contains the
+    // string, and the env var should be marked up as code, not prose.
+    expect(await screen.findByText(/TRUG_BOOTSTRAP_TOKEN/, { selector: 'code' })).toBeTruthy();
+    expect(screen.getByText(/container logs/i)).toBeTruthy();
+  });
+
+  it('shows the ordinary gate once the instance is claimed', async () => {
+    bootstrapState.mockResolvedValue({ claimable: false });
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    expect(await screen.findByText(/welcome back/i)).toBeTruthy();
+    expect(screen.queryByText(/hasn't been claimed yet/i)).toBeNull();
+  });
+
+  it('degrades to the ordinary gate when the claimable probe fails', async () => {
+    // Offline or a 429 on the probe must never strand the sign-in screen.
+    bootstrapState.mockRejectedValue(new Error('network'));
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    expect(await screen.findByRole('button', { name: /^sign in$/i })).toBeTruthy();
+    expect(screen.queryByText(/hasn't been claimed yet/i)).toBeNull();
+  });
+});
+
+// Hardening the first-run path: the claimable probe is best-effort, so every
+// way it can fail must still leave a new deployer a usable route in.
+describe('AuthGate — first-run probe failure modes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    getToken.mockReturnValue(null);
+    hasCookieSession.mockResolvedValue(false);
+    probeAuthStatus.mockResolvedValue('lost');
+    probeToken.mockResolvedValue('lost');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: false });
+  });
+
+  it('reveals the token field when the claimable probe fails, so a first-run deployer is not stranded', async () => {
+    // If the probe fails on a genuinely unclaimed instance we show the ordinary
+    // gate — whose "sign in" cannot work. The one action that CAN work must
+    // therefore be on screen rather than hidden behind a link.
+    bootstrapState.mockRejectedValue(new Error('network'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    expect(await screen.findByLabelText('Access token')).toBeTruthy();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('does not re-probe claimability when the boot probe already said unclaimed', async () => {
+    // Saves a round-trip and, more importantly, keeps the claim path off a
+    // second chance to hit the probe's rate limit.
+    bootstrapState.mockResolvedValue({ claimable: true });
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const input = await screen.findByLabelText('Bootstrap token');
+    await fireEvent.input(input, { target: { value: 'boot-secret' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    await screen.findByLabelText('Your name');
+    expect(bootstrapState).toHaveBeenCalledTimes(1);
+  });
+
+  it('says "too many attempts" — never "invalid token" — when the divert probe is rate limited', async () => {
+    // A correct bootstrap token must never be reported as wrong just because
+    // the probe was throttled; that reads as "my token is broken" on an
+    // instance the deployer cannot otherwise get into.
+    // Boot probe succeeds (so we're on the ordinary gate); the divert probe
+    // inside submitToken is the one that gets throttled.
+    bootstrapState
+      .mockResolvedValueOnce({ claimable: false })
+      .mockRejectedValue(new ApiError(429, 'Too many requests'));
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
+    const input = await screen.findByLabelText('Access token');
+    await fireEvent.input(input, { target: { value: 'boot-secret' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/too many/i);
+    expect(alert.textContent).not.toMatch(/wasn't accepted/i);
+  });
+
+  it('keeps the token field visible after escaping the claim panel', async () => {
+    // "back to sign in" is a reversible-sounding label; it must not strip the
+    // only affordance that works on a still-unclaimed instance.
+    bootstrapState.mockResolvedValue({ claimable: true });
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const input = await screen.findByLabelText('Bootstrap token');
+    await fireEvent.input(input, { target: { value: 'boot-secret' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    await screen.findByLabelText('Your name');
+    await fireEvent.click(screen.getByRole('button', { name: /back to sign in/i }));
+    await screen.findByRole('button', { name: /^sign in$/i });
+    expect(screen.getByLabelText('Access token')).toBeTruthy();
+  });
+
+  it('marks the bootstrap field invalid for screen readers on the first-run gate', async () => {
+    bootstrapState.mockResolvedValue({ claimable: true });
+    probeToken.mockResolvedValue('error');
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const input = await screen.findByLabelText('Bootstrap token');
+    await fireEvent.input(input, { target: { value: 'x' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    await screen.findByRole('alert');
+    expect(screen.getByLabelText('Bootstrap token').getAttribute('aria-invalid')).toBe('true');
+  });
+});
+
+// The claim endpoints answer 403 for three different causes (already claimed /
+// wrong token / bad origin). Conflating them tells a deployer with a typo that
+// someone else stole their instance — and, worse, tears down the first-run
+// guidance that would help them fix it. (The genuine-race case is covered by
+// the 'already-claimed 403 mid-ceremony' test above.)
+describe('AuthGate — first-run 403 disambiguation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    getToken.mockReturnValue(null);
+    hasCookieSession.mockResolvedValue(false);
+    probeAuthStatus.mockResolvedValue('lost');
+    probeToken.mockResolvedValue('lost');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: true });
+    bootstrapClaimOptions.mockRejectedValue(
+      Object.assign(new Error('Invalid bootstrap token'), { status: 403 }),
+    );
+  });
+
+  async function reachClaimPanel() {
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const input = await screen.findByLabelText('Bootstrap token');
+    await fireEvent.input(input, { target: { value: 'typo-token' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    const name = await screen.findByLabelText('Your name');
+    await fireEvent.input(name, { target: { value: 'Alice' } });
+    await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+  }
+
+  it('keeps the first-run panel and blames the token when the instance is still unclaimed', async () => {
+    await reachClaimPanel();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/bootstrap token/i);
+    // Must NOT claim someone else took it — on an unclaimed instance the
+    // suggested recoveries (passkey, invite) are both impossible.
+    expect(alert.textContent).not.toMatch(/someone else/i);
+    // And the way out is still on screen.
+    expect(screen.getByLabelText('Your name')).toBeTruthy();
+  });
+});
+
+describe('AuthGate — inconclusive probe never accuses the token', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    getToken.mockReturnValue(null);
+    hasCookieSession.mockResolvedValue(false);
+    probeAuthStatus.mockResolvedValue('lost');
+    probeToken.mockResolvedValue('lost');
+    consumeUrlTokenError.mockReturnValue(false);
+  });
+
+  it('says "couldn\'t reach the server" when the divert probe 5xxs, not "invalid token"', async () => {
+    // A warming proxy / restarting Pi 502s. The pasted token may be perfectly
+    // correct — a 401 from /api/list is exactly what a correct BOOTSTRAP token
+    // looks like — so claimability is unknown, not "your token is wrong".
+    bootstrapState
+      .mockResolvedValueOnce({ claimable: false })
+      .mockRejectedValue(new ApiError(502, 'Bad gateway'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    await fireEvent.click(await screen.findByRole('button', { name: /use an access token/i }));
+    const input = await screen.findByLabelText('Access token');
+    await fireEvent.input(input, { target: { value: 'boot-secret' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/couldn't reach the server/i);
+    expect(alert.textContent).not.toMatch(/wasn't accepted/i);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

@@ -737,6 +737,21 @@ def test_bootstrap_state_reflects_roster():
     assert c.get("/auth/bootstrap/state").json()["claimable"] is False
 
 
+def test_bootstrap_state_reports_claimable_during_a_recovery_reopen():
+    """A full lockout leaves users on the roster with no working credential, so
+    `recover --reset-bootstrap` re-opens the claim. The probe must agree with
+    the guard the claim endpoints actually use — otherwise the gate tells a
+    locked-out operator the instance is claimed while the claim in fact works,
+    hiding the onboarding exactly when it is needed most."""
+    c, app = make_auth_client(seed=())
+    app.state.auth_repo.seed_users(["alice"])
+    assert c.get("/auth/bootstrap/state").json()["claimable"] is False
+
+    app.state.auth_repo.reopen_bootstrap()
+    assert app.state.auth_repo.bootstrap_reopen_active() is True
+    assert c.get("/auth/bootstrap/state").json()["claimable"] is True
+
+
 def test_bootstrap_options_does_not_persist_user():
     """SEAMED — options returns a challenge but does NOT create the user yet, so
     the flow stays open (user_count 0) until verify completes atomically."""

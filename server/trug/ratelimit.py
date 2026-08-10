@@ -55,6 +55,12 @@ AUTH_WINDOW = 60
 TOKEN_LIMIT = 30
 TOKEN_WINDOW = 60
 
+# Unauthenticated read-only probes (currently the gate's claimable check). The
+# gate hits this on every load, so the ceiling is generous — its own bucket
+# keeps ordinary page reloads from eating the far tighter claim budget.
+PROBE_LIMIT = 60
+PROBE_WINDOW = 60
+
 # Hard cap on the number of distinct (ip, bucket) windows held in memory. An
 # attacker rotating source IPs cannot grow state past this: the least-recently
 # seen window is evicted once the cap is reached.
@@ -196,3 +202,7 @@ token_rate_limit = rate_limit("token", TOKEN_LIMIT, TOKEN_WINDOW)
 # RFC 7591 Dynamic Client Registration (/oauth/register): an unauthenticated
 # write, so it gets its own tight bucket (same shape as the auth ceremonies).
 dcr_rate_limit = rate_limit("dcr", AUTH_LIMIT, AUTH_WINDOW)
+# Deliberately a SEPARATE bucket from ``bootstrap_rate_limit``: the gate polls
+# the claimable probe on every load, and sharing would let a few page reloads
+# 429 the claim itself — locking a new deployer out of their own instance.
+bootstrap_state_rate_limit = rate_limit("bootstrap_state", PROBE_LIMIT, PROBE_WINDOW)

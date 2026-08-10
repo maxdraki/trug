@@ -205,8 +205,10 @@ export const api = {
   // `request()` (credentials: 'same-origin').
   auth: {
     /**
-     * Is this instance still claimable (zero users)? Unauthenticated probe used
-     * by the gate to route a pasted token into the first-account bootstrap flow.
+     * Is this instance still claimable — zero users, or a live recovery reopen
+     * (`trug-doctor recover --reset-bootstrap`)? Unauthenticated probe used by
+     * the gate both to show the first-run onboarding and to route a pasted
+     * token into the first-account bootstrap flow.
      */
     bootstrapState(): Promise<BootstrapState> {
       return requestJson<BootstrapState>('/auth/bootstrap/state');

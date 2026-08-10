@@ -9,6 +9,7 @@
     probeToken,
     consumeUrlTokenError,
     api,
+    ApiError,
   } from '../lib/api';
   import { clearSnapshot, hasSnapshot } from '../lib/snapshot';
   import {
@@ -60,10 +61,19 @@
   // blip. Surface reachability and let them retry instead.
   const SERVER_UNREACHABLE_MESSAGE =
     "couldn't reach the server. check your connection and try again.";
+  // The claimability probe was rate limited. Distinct from INVALID_TOKEN so a
+  // correct bootstrap token is never reported as wrong just because we were
+  // throttled — that reads as "my token is broken" to a first-time deployer.
+  const THROTTLED_MESSAGE = 'too many attempts just now. wait a minute and try again.';
   // The instance was claimed by someone else mid-ceremony — the held bootstrap
   // token is spent, so drop back to the normal gate.
   const ALREADY_CLAIMED_MESSAGE =
     'this instance was just claimed by someone else. sign in with your passkey or use an invite.';
+  // The claim was refused while the instance is still claimable — so it's the
+  // token that's wrong, not the world. Kept distinct from ALREADY_CLAIMED so a
+  // typo doesn't send a first-time deployer chasing a nonexistent passkey.
+  const INVALID_BOOTSTRAP_TOKEN_MESSAGE =
+    "that bootstrap token wasn't accepted. check it and try again.";
 
   function parseInvite(): string | null {
     if (typeof location === 'undefined') return null;
@@ -107,6 +117,13 @@
   let claiming = $state(false);
   let bootstrapToken = $state('');
   let firstName = $state('');
+
+  // A freshly deployed instance has no account to sign in to, so the ordinary
+  // "welcome back / sign in" gate is a dead end there — the only action that
+  // can succeed is pasting the bootstrap token. Resolved once at boot from the
+  // server's claimable probe; a failed probe leaves this false and the gate
+  // behaves exactly as before.
+  let unclaimed = $state(false);
 
   // Passkey sign-in is a live challenge-response with the server, so it can't
   // work offline. Track connectivity reactively to disable the sign-in paths
@@ -155,6 +172,24 @@
           if (status === 'ok') authed = true;
           else if (status === 'lost') clearSnapshot();
           else authed = hasSnapshot();
+        }
+        // Only when we're actually about to show the gate: ask whether this
+        // instance has been claimed, so a first-run visitor gets the claim
+        // path instead of a sign-in button that cannot work. Best-effort —
+        // offline, a 429, or any other failure just leaves the ordinary gate.
+        if (!authed) {
+          try {
+            unclaimed = (await api.auth.bootstrapState()).claimable;
+          } catch (err) {
+            // Inconclusive: fall through to the returning-user gate, but REVEAL
+            // the token field. If this instance really is unclaimed, "sign in"
+            // cannot possibly work — leaving the only usable action hidden
+            // behind a link would strand the deployer with no way in. Logged
+            // because every cause lands here (offline, 429, 5xx, a renamed
+            // export) and they are otherwise indistinguishable in the field.
+            console.warn('claimable probe failed', err);
+            showToken = true;
+          }
         }
         resolving = false;
         if (authed) goNext();
@@ -254,6 +289,15 @@
     // instance the pasted value is the bootstrap token (not in settings.tokens,
     // so it correctly 401s /api/list) — switch to the create-first-account panel
     // and hold it. Anywhere else it's simply an invalid token.
+    // The boot probe already answered for the first-run gate, so trust it: no
+    // second round-trip, and no second chance to hit the probe's rate limit on
+    // the one path a new deployer depends on.
+    if (unclaimed) {
+      bootstrapToken = token;
+      claiming = true;
+      checking = false;
+      return;
+    }
     try {
       const state = await api.auth.bootstrapState();
       if (state.claimable) {
@@ -262,10 +306,21 @@
         checking = false;
         return;
       }
-    } catch {
-      // The claimability probe itself failed (network) — inconclusive. The
-      // token was confirmed-rejected above, so fall through to "invalid" rather
-      // than pinning them; a retry re-probes claimability.
+    } catch (err) {
+      // Throttled: say so. Reporting "that token wasn't accepted" here would be
+      // a flat lie about a possibly-correct token, on an instance they may have
+      // no other way into — the same reasoning as SERVER_UNREACHABLE_MESSAGE.
+      console.warn('claimable probe failed during token submit', err);
+      checking = false;
+      // Claimability is UNKNOWN, so we cannot call this token invalid: a 401
+      // from /api/list is exactly what a correct bootstrap token looks like on
+      // a fresh instance. Say what actually went wrong instead. (Same reasoning
+      // as SERVER_UNREACHABLE_MESSAGE above, reached via a different status.)
+      error =
+        err instanceof ApiError && err.status === 429
+          ? THROTTLED_MESSAGE
+          : SERVER_UNREACHABLE_MESSAGE;
+      return;
     }
     checking = false;
     error = INVALID_TOKEN_MESSAGE;
@@ -280,6 +335,17 @@
     bootstrapToken = '';
     firstName = '';
     error = null;
+    // Also leave the first-run gate. Reached two ways, and it is the right
+    // answer for both: after an "already claimed by someone else" 403 the
+    // instance demonstrably IS claimed, so insisting otherwise would be a lie;
+    // and a deliberate "back to sign in" is the manual override for a stale or
+    // wrong probe. Pasting the bootstrap token again still routes to the claim.
+    unclaimed = false;
+    // …but keep the token field on screen. Leaving the first-run gate must not
+    // strip the only affordance that works if the instance IS still unclaimed —
+    // "back to sign in" reads as reversible, so it must not be a one-way
+    // downgrade to a hidden link labelled for a different kind of token.
+    showToken = true;
   }
 
   // Claim the first account: the held bootstrap token authorises a one-time
@@ -307,8 +373,27 @@
     } catch (err) {
       const status = (err as { status?: number } | null)?.status;
       if (status === 403) {
-        exitClaim();
-        error = ALREADY_CLAIMED_MESSAGE;
+        // 403 covers three different causes: already claimed, wrong bootstrap
+        // token, and a bad origin. Ask the server which world we're in rather
+        // than assuming the worst — telling a deployer who mistyped their token
+        // that "someone else claimed this instance" is a lie whose two
+        // suggested recoveries (passkey, invite) are both impossible on an
+        // unclaimed instance, and exitClaim would tear down the very guidance
+        // that tells them where the real token lives.
+        let stillClaimable: boolean | null = null;
+        try {
+          stillClaimable = (await api.auth.bootstrapState()).claimable;
+        } catch (probeErr) {
+          console.warn('claimable re-probe after 403 failed', probeErr);
+        }
+        if (stillClaimable === false) {
+          exitClaim();
+          error = ALREADY_CLAIMED_MESSAGE;
+        } else {
+          // Still claimable (or we couldn't tell): stay put, keep the first-run
+          // context, and name the actual likely problem.
+          error = INVALID_BOOTSTRAP_TOKEN_MESSAGE;
+        }
       } else {
         error = friendly(err);
       }
@@ -375,6 +460,19 @@
         <!-- invite but no passkey support: fall back to explaining -->
         <p>this browser can't create a passkey. open the invite on a device with Face ID, Touch ID, or a security key.</p>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
+      {:else if unclaimed}
+        <!-- (a2) first run: nobody has claimed this instance yet. There is no
+             account to sign in to, so lead with the bootstrap token (the form
+             below renders for this state) and answer "where do I find it?"
+             right here — that question is the whole of the first-run cliff. -->
+        <p class="claim-title">this trug hasn't been claimed yet.</p>
+        <p>paste your bootstrap token to create the first account.</p>
+        {#if error}<p class="error" role="alert">{error}</p>{/if}
+        {#if !online}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
+        <div class="where">
+          <p>deployed on Railway? it's <code>TRUG_BOOTSTRAP_TOKEN</code> in your service's Variables tab.</p>
+          <p>self-hosting with Docker? it's printed in the container logs on first boot.</p>
+        </div>
       {:else if supported}
         <!-- (b) returning user: discoverable sign-in, quiet token fallback -->
         <p>welcome back.</p>
@@ -393,17 +491,18 @@
         <p>this browser doesn't support passkeys. paste an access token to open your list.</p>
       {/if}
 
-      {#if !resolving && !claiming && showToken}
+      {#if !resolving && !claiming && (showToken || unclaimed)}
         <form onsubmit={submitToken}>
-          {#if !online && !supported}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
+          <!-- The unclaimed branch prints its own offline line; don't double up. -->
+          {#if !online && !supported && !unclaimed}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
           <input
             type="password"
             bind:value={tokenValue}
-            placeholder="access token"
-            aria-label="Access token"
+            placeholder={unclaimed ? 'bootstrap token' : 'access token'}
+            aria-label={unclaimed ? 'Bootstrap token' : 'Access token'}
             autocomplete="off"
             autocapitalize="off"
-            aria-invalid={!!error && showToken}
+            aria-invalid={!!error && (showToken || unclaimed)}
             oninput={() => (error = null)}
           />
           <button type="submit" class="secondary" disabled={!tokenValue.trim() || checking || !online}>
@@ -449,6 +548,30 @@
     color: var(--ctp-subtext0);
     font-size: 14px;
     line-height: 1.45;
+  }
+  /* First-run welcome: calm, not an error state — this is the first thing a
+     new deployer ever sees. The accent is spent on the mark above; peach text
+     here reads as a warning (in Latte it is very nearly red), so the headline
+     earns its emphasis from weight and the plain text colour instead. */
+  .claim-title {
+    color: var(--ctp-text);
+    font-weight: 500;
+  }
+  .where {
+    margin-top: 4px;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--ctp-subtext0);
+  }
+  .where p {
+    margin: 0;
+  }
+  .where code {
+    font-size: 12px;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: var(--ctp-surface0);
+    color: var(--ctp-subtext1);
   }
   .error {
     margin: -4px 0 0;
