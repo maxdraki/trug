@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-10
+
 ### Added
 
 - A one-line installer (`install.sh`): `curl -fsSL .../install.sh | sh`. It writes `~/.trug`,
@@ -32,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The installer's closing message could hand out a VPN address as "on the wifi". Its address
+  lookup had drifted from `trug share`'s and was missing the interface scan, so on Linux it fell
+  straight through to the routing table — which returns the VPN's source whenever a VPN carries
+  the default route. Both now prefer a private address on a real interface.
+- A duplicated key in `.env` is resolved the way Compose resolves it — last wins. Both readers
+  took the first, so appending a line to override an earlier one (which genuinely works, because
+  `env_file` takes the last) made `trug share` hand out a token the running server rejects.
+- 32-bit Raspberry Pi OS is caught on a Pi 4/400/CM4, where `arm_64bit=1` is the default and
+  `uname -m` reports `armv8l` rather than `armv7l`. 32-bit x86 too.
+- `trug set-origin` no longer leaves a world-readable temp file holding all four secrets if it is
+  interrupted.
 - `trug share` warns, when `ufw` is running on Linux, that ufw is *not* protecting the published
   port. Docker forwards published ports past ufw's rules entirely, so a default-deny policy gives
   a false sense of what is reachable. The `DOCKER-USER` chain is where a real restriction goes.
@@ -107,5 +120,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/maxdraki/trug/compare/v0.1.5...v0.2.0
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0

@@ -150,12 +150,19 @@ jobs:
             if [ "$i" = "60" ]; then echo "::error::container never became healthy"; exit 1; fi
             sleep 1
           done
-          curl -fsS http://localhost:8000/ | grep -q "<title>Trug</title>" \
-            || { echo "::error::SPA not served at /"; exit 1; }
-          # trug-doctor exits non-zero on warnings (expected in a bare
-          # container with no TRUG_ORIGIN), so assert it emits valid JSON
-          # rather than a clean exit — this proves the console script shipped.
-          docker exec trug-ci /app/.venv/bin/trug-doctor --json --redact \
+          # Captured, not piped. Both of these were correct only because
+          # GitHub's default shell omits `pipefail` — adding `shell: bash`
+          # anywhere above, which looks like tidying, would break them:
+          # `grep -q` SIGPIPEs curl once the page exceeds a pipe buffer, and
+          # trug-doctor's exit 1 on warnings (expected here, and the reason this
+          # asserts on the JSON rather than the status) would fail the step.
+          body="$(curl -fsS http://localhost:8000/)"
+          case "$body" in
+            *"<title>Trug</title>"*) ;;
+            *) echo "::error::SPA not served at /"; exit 1 ;;
+          esac
+          doctor_json="$(docker exec trug-ci /app/.venv/bin/trug-doctor --json --redact || true)"
+          printf '%s' "$doctor_json" \
             | python3 -c "import json,sys; json.load(sys.stdin)['status']" \
             || { echo "::error::trug-doctor missing or not emitting valid JSON"; exit 1; }
 
@@ -217,12 +224,24 @@ jobs:
         run: docker logs trug-ci || true; docker logs trug-ci-port || true; docker logs trug-ci-empty || true
 
   shell:
-    name: shell (shellcheck + bats)
-    runs-on: ubuntu-latest
+    name: shell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     # install.sh and bin/trug are the first code a self-hoster runs, and neither
     # has a compiler or a type-checker to catch a typo'd variable. shellcheck is
     # that check; bats covers the behaviour that would otherwise only be found
     # by someone's broken Saturday.
+    #
+    # BOTH platforms, and this is the point of the job. These scripts are written
+    # on a Mac (BSD userland) and run in production on Linux (GNU userland), and
+    # for a while the only place each was exercised was one of those two — so
+    # every divergence was structurally guaranteed to surface as a CI
+    # round-trip. It cost three in one afternoon: `stat -f` vs `stat -c`, bats
+    # 1.10 vs 1.14 on whether a bare `[[ ]]` fails a test, and shellcheck 0.10
+    # vs 0.11 on SC2015. A macOS leg needs no Docker, since the suite stubs it.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v7
 
@@ -236,6 +255,7 @@ jobs:
         # version in both directions, so an unpinned lint is a check that can
         # start failing on a commit that changed nothing, and can pass locally
         # while failing here. Bump this deliberately.
+        if: matrix.os == 'ubuntu-latest'
         env:
           SHELLCHECK_VERSION: v0.10.0
         run: |
@@ -244,9 +264,20 @@ jobs:
           shellcheck --version
           shellcheck -s sh install.sh
           shellcheck bin/trug
+          shellcheck -s bash tests/shell/helpers.bash
 
       - name: Install bats-core
-        run: sudo apt-get update && sudo apt-get install -y bats
+        # Pinned, for the same reason shellcheck is. `apt-get install bats` is
+        # 1.10 on ubuntu-24.04 and would jump when the runner image rolls;
+        # Homebrew's is 1.14 today. Those two disagree about whether a failing
+        # `[[ ]]` fails a test, which is exactly the kind of silent semantic
+        # change that must not arrive without a commit.
+        env:
+          BATS_VERSION: v1.11.1
+        run: |
+          git clone --depth 1 --branch "$BATS_VERSION" https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+          bats --version
 
       - name: Test (bats)
         run: bats tests/shell/

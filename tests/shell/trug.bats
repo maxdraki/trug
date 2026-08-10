@@ -66,17 +66,21 @@ teardown() { teardown_sandbox; }
   assert_contains "http://192.168.1.42:8000/?token=mcptokenmcptokenmcptokenmcptoke1" "$output"
 }
 
-@test "share: a duplicated key in .env doesn't put a newline in the link" {
-  # Appending a key to override an earlier one is a natural hand-edit — Compose's
-  # env_file takes the last value, so it works. A reader that returns both
-  # concatenates them into the URL and the QR built from it.
+@test "share: a duplicated key resolves the way Compose resolves it — last wins" {
+  # Appending a line to override an earlier one is an ordinary hand-edit, and it
+  # genuinely works, because `env_file` takes the last value. So the link has to
+  # carry the value the *running server* has: taking the first would print a
+  # token the server rejects, with both sides looking correct.
   echo "TRUG_TOKEN_MCP=secondvaluesecondvaluesecondva2" >>"$HOME/.trug/.env"
   echo "PORT=8090" >>"$HOME/.trug/.env"
   run bash "$TRUG" share
   [ "$status" -eq 0 ]
+  assert_contains "http://192.168.1.42:8090/?token=secondvaluesecondvaluesecondva2" "$output"
+  refute_contains "mcptokenmcptokenmcptokenmcptoke1" "$output"
+  # And exactly one URL: a reader returning both values would splice them
+  # together, newline and all, into the link and the QR built from it.
   url="$(printf '%s\n' "$output" | grep -o 'http://[^ ]*?token=[^ ]*')"
   [ "$(printf '%s\n' "$url" | wc -l | tr -d ' ')" = "1" ]
-  refute_contains "mcptokenmcptokenmcptokenmcptoke1secondvalue" "$url"
 }
 
 @test "share: never prints the bootstrap token, which is a different power" {

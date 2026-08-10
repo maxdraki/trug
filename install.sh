@@ -193,9 +193,10 @@ no_randomness() {
 # on its own and piped straight to a shell, so it cannot source anything. Keep
 # the two in step by hand — three lines is a cheaper price than a curl pipeline
 # that depends on a second download.
+# The LAST match, matching Compose's `env_file` precedence — see bin/trug's copy.
 env_value() {
   [ -f "$2" ] || return 0
-  sed -n "s/^$1=//p" "$2" | head -n 1
+  sed -n "s/^$1=//p" "$2" | tail -n 1
 }
 
 # Remove a key that is present but has no value. An empty environment variable
@@ -351,7 +352,12 @@ ENV
       # Windows gives every value a trailing \r, which would otherwise look set.
       # A pinned token someone chose themselves is left alone whatever its
       # shape: this fills gaps, it does not police values.
-      if [ -z "$(env_value "$key" "$target" | tr -d '[:space:]')" ]; then
+      # LC_ALL=C, like gen_token's tr: BSD tr aborts with "Illegal byte sequence"
+      # on invalid multibyte input in a UTF-8 locale. A .env hand-edited in
+      # Latin-1 would kill it here, the substitution would come back empty, and
+      # the installer would conclude the key is missing and regenerate
+      # TRUG_SECRET — which is documented above as unrecoverable.
+      if [ -z "$(env_value "$key" "$target" | LC_ALL=C tr -d '[:space:]')" ]; then
         generate_token
         ensure_key "$target" "$key" "$NEW_TOKEN"
       fi
@@ -404,11 +410,16 @@ banner
 step "Checking this machine"
 
 case "$(uname -m 2>/dev/null || echo unknown)" in
-  armv6l|armv7l|armhf)
-    die "This looks like a 32-bit Raspberry Pi OS." \
+  armv6l|armv7l|armv8l|armhf|i386|i686)
+    # armv8l is the one people miss: 32-bit Raspberry Pi OS sets arm_64bit=1 by
+    # default on a Pi 4/400/CM4, so it runs a 64-bit kernel under a 32-bit
+    # userland and reports armv8l rather than armv7l. Same outcome, and without
+    # this it sails past the guard into Docker's own error message.
+    die "This is a 32-bit userland ($(uname -m))." \
         "trug's image is 64-bit only (amd64 and arm64), so the pull would fail" \
-        "with 'no matching manifest for linux/arm/v7'." \
-        "If the Pi is a 3, 4, 5 or Zero 2, reflash with the 64-bit Raspberry Pi OS." ;;
+        "with 'no matching manifest'." \
+        "On a Pi 3, 4, 5 or Zero 2, reflash with the 64-bit Raspberry Pi OS —" \
+        "a 64-bit kernel is not enough, the userland has to be 64-bit too." ;;
 esac
 ok "Architecture $(uname -m) is supported"
 
@@ -612,15 +623,26 @@ fi
 # Which address other devices should use. Mirrors bin/trug's lan_ip() and must
 # stay in step with it — see env_value above for why they aren't shared.
 #
-# The routing table goes FIRST on Linux. `hostname -I` prints every address the
-# box has, and the only machines this ever runs on are ones with Docker
-# installed, so 172.17.0.1 (docker0) is routinely in that list with no
-# guaranteed ordering. Handing out the bridge address produces the worst kind of
-# failure: a QR that scans, a link that looks right, and a phone that times out
-# while every line on screen says it should have worked.
+# A private address on a real interface FIRST, then the routing table. Both
+# fallbacks exist because both ways of guessing are wrong on a real machine:
+# `ip route get` returns the VPN's source whenever a VPN carries the default
+# route (a Tailscale exit node — and Tailscale is what the closing message
+# recommends next), and `hostname -I` lists every address including docker0.
+# Either produces the worst kind of failure: a link that looks right and times
+# out from every phone in the house.
+#
+# This drifted from bin/trug's lan_ip() once already, while the comment above
+# claimed it hadn't — a review caught it. Change both or neither.
 LAN_IP=''
 if command -v ipconfig >/dev/null 2>&1; then
   LAN_IP="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+fi
+if [ -z "$LAN_IP" ] && command -v ip >/dev/null 2>&1; then
+  LAN_IP="$(ip -4 -o addr show scope global 2>/dev/null \
+    | awk '$2 !~ /^(docker|br-|veth|virbr|tailscale|wg|tun|zt|lo)/ { print $4 }' \
+    | cut -d/ -f1 \
+    | grep -E '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' \
+    | head -n 1 || true)"
 fi
 if [ -z "$LAN_IP" ] && command -v ip >/dev/null 2>&1; then
   LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || true)"
