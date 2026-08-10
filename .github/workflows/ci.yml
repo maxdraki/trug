@@ -159,6 +159,59 @@ jobs:
             | python3 -c "import json,sys; json.load(sys.stdin)['status']" \
             || { echo "::error::trug-doctor missing or not emitting valid JSON"; exit 1; }
 
+      - name: Boot again with a platform-injected PORT
+        # Railway, Render, Fly and Heroku all inject PORT and aim their
+        # healthcheck and public routing at it. Hardcoding 8000 made every
+        # Railway template deploy fail with "service unavailable" while the app
+        # sat happily on the wrong port — and the zero-env smoke test above
+        # could never have caught it, because nothing there sets PORT.
+        run: |
+          set -e
+          check() {
+            name="$1"; port="$2"; shift 2
+            docker run -d --name "$name" "$@" -p "$port:$port" trug:ci >/dev/null
+            for i in $(seq 1 60); do
+              curl -fsS "http://localhost:$port/healthz" >/dev/null 2>&1 && break
+              if [ "$i" = 60 ]; then
+                echo "::error::$name never served on port $port"
+                docker logs "$name" || true
+                exit 1
+              fi
+              sleep 1
+            done
+            # Assert the container's OWN verdict, not just host reachability:
+            # orchestrators act on this, and a mismatch between how the
+            # entrypoint and the HEALTHCHECK default PORT leaves curl passing
+            # while the container reports itself unhealthy.
+            for i in $(seq 1 30); do
+              status=$(docker inspect -f '{{.State.Health.Status}}' "$name")
+              [ "$status" = healthy ] && break
+              if [ "$status" = unhealthy ] || [ "$i" = 30 ]; then
+                echo "::error::$name serves on $port but its HEALTHCHECK reports $status"
+                docker inspect -f '{{json .State.Health}}' "$name" || true
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "$name: serving on $port, HEALTHCHECK healthy"
+            docker rm -f "$name" >/dev/null
+          }
+
+          docker rm -f trug-ci >/dev/null 2>&1 || true   # frees port 8000
+
+          check trug-ci-port 9090 -e PORT=9090
+          # Railway can inject an EMPTY value; the entrypoint and the
+          # HEALTHCHECK must BOTH fall back to 8000, or the container lies.
+          check trug-ci-empty 8000 -e PORT=
+
+          # A non-numeric PORT must fail loudly rather than land on uvicorn's
+          # argv — "8000 --log-level critical" would silence every log line.
+          if docker run --rm -e PORT="8000 --log-level critical" trug:ci >/dev/null 2>&1; then
+            echo "::error::a non-numeric PORT was accepted — argv injection is possible"
+            exit 1
+          fi
+          echo "non-numeric PORT rejected"
+
       - name: Container logs (on failure)
         if: failure()
-        run: docker logs trug-ci || true
+        run: docker logs trug-ci || true; docker logs trug-ci-port || true; docker logs trug-ci-empty || true

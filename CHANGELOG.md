@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-08-10
+
+### Fixed
+
+- Deploying to a platform that picks its own port — Railway, Render, Fly,
+  Heroku — failed every healthcheck with "service unavailable", because the
+  container always listened on 8000 regardless of the `PORT` the platform
+  assigned. It now binds `PORT` when one is set, falling back to 8000
+  otherwise, so Docker Compose and Raspberry Pi installs are unchanged. A
+  non-numeric `PORT` is now rejected with a clear message instead of being
+  passed through to the server's command line.
+- The container's healthcheck follows `PORT` too, so it can no longer report a
+  perfectly healthy container as unhealthy. Compose publishes the same port it
+  serves on, so setting `PORT` in `.env` can't leave you with a running
+  container that nothing can reach.
+
 ## [0.1.4] - 2026-08-10
 
 ### Fixed
@@ -94,7 +110,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/maxdraki/trug/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/maxdraki/trug/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/maxdraki/trug/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/maxdraki/trug/compare/v0.1.1...v0.1.2

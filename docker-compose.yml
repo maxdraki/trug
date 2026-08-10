@@ -15,7 +15,9 @@ services:
     build: .
     ports:
       # Default publishes on all interfaces — correct for direct LAN / Pi use.
-      - "8000:8000"
+      # Follows PORT from .env so setting it there can't leave the container
+      # serving on a port nothing is published to (healthy but unreachable).
+      - "${PORT:-8000}:${PORT:-8000}"
       # Behind a reverse proxy or tunnel (Cloudflare Tunnel, Tailscale Serve),
       # bind loopback-only instead so the port isn't directly reachable —
       # otherwise a client hitting it directly can forge X-Forwarded-For and

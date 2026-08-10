@@ -51,12 +51,23 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV TRUG_DB_PATH=/data/trug.db \
     TRUG_STATIC_DIR=/app/static
 
+# Documentation only, and the port used whenever PORT is unset — Compose, a Pi,
+# and `docker run` all land here.
 EXPOSE 8000
 
 # httpx is a runtime dependency of the server, so the healthcheck runs from the
-# same venv as the app (no `uv run`, which would need a writable cache).
+# same venv as the app (no `uv run`, which would need a writable cache). This
+# runs as a fresh process, so it does NOT see the entrypoint's normalised PORT
+# and must repeat the fallback — `or` not `.get(…, default)`, so that an EMPTY
+# PORT lands on 8000 exactly as the entrypoint does. Diverging here would make a
+# perfectly healthy container report itself unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["/app/.venv/bin/python", "-c", "import httpx; httpx.get('http://localhost:8000/healthz').raise_for_status()"]
+    CMD ["/app/.venv/bin/python", "-c", "import os, httpx; httpx.get('http://localhost:' + (os.environ.get('PORT') or '8000') + '/healthz').raise_for_status()"]
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-CMD ["/app/.venv/bin/uvicorn", "trug.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# PORT is normalised and validated by the entrypoint, so it is a plain integer
+# by the time it lands here; quoted anyway. Hardcoding 8000 made every Railway
+# template deploy fail healthchecks with "service unavailable" while the app sat
+# happily on the wrong port. `exec` so uvicorn replaces the shell and stays
+# PID 1 — dropping it silently reintroduces a 10s SIGKILL wait on every stop.
+CMD ["sh", "-c", "exec /app/.venv/bin/uvicorn trug.app:app --host 0.0.0.0 --port \"$PORT\""]
