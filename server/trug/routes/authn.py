@@ -317,7 +317,7 @@ def bootstrap_verify(
             exc.__class__.__name__,
             exc,
         )
-        raise HTTPException(status_code=400, detail="Registration failed") from exc
+        raise HTTPException(status_code=400, detail="Passkey verification failed") from exc
 
     # Atomic one-time claim: claim_first_user inserts the user, their credential
     # AND their session in a SINGLE transaction, only if the roster is still
@@ -437,7 +437,7 @@ def register_verify(
             exc.__class__.__name__,
             exc,
         )
-        raise HTTPException(status_code=400, detail="Registration failed") from exc
+        raise HTTPException(status_code=400, detail="Passkey verification failed") from exc
 
     # Redeem the invite atomically before persisting anything: consume_invite
     # only returns True for the single caller that actually flips

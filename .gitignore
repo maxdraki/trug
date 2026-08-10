@@ -30,3 +30,9 @@ config.yaml
 # ignore local settings and scratch so they can never be committed.
 .claude/*
 !.claude/skills/
+
+# Railway template artifacts — the marketplace copy, the maintainer runbook and
+# anything exported from the template composer are operational, not part of the
+# shipped project. Kept local (and out of the public snapshot entirely).
+docs/railway-template*
+railway-template*

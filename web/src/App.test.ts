@@ -45,6 +45,7 @@ vi.mock('./lib/api', () => ({
 
 vi.mock('./lib/passkey', () => ({
   isPasskeySupported: () => true,
+  passkeySupport: () => 'ok',
   isCancellation: () => false,
   performRegistration: vi.fn(),
   performAuthentication: vi.fn(),

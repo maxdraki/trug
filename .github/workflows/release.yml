@@ -20,16 +20,16 @@ jobs:
     name: Build and push multi-arch image to GHCR
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -40,6 +40,30 @@ jobs:
         # GHCR rejects uppercase image names; github.repository preserves the
         # owner's case, so downcase it before using it in tags.
         run: echo "repo=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the image name matches what users actually pull
+        # docker-compose.yml and install.sh hardcode one image name. Deriving
+        # the published name from the repository instead means a release cut
+        # from a fork or a staging clone publishes somewhere nobody is looking:
+        # the workflow goes green, the release notes appear, and every
+        # `docker compose pull` in the world keeps getting the old image. Fail
+        # here instead, where it is one line to read.
+        env:
+          # Through env rather than inline ${{ }}: this one is derived from the
+          # repository name and safe, but keeping every interpolation out of the
+          # shell body is what stops the habit from meeting an untrusted value.
+          REPO: ${{ steps.image.outputs.repo }}
+        run: |
+          published="ghcr.io/${REPO}"
+          expected="$(sed -n 's|^ *image: \(ghcr.io/[^:]*\):.*|\1|p' docker-compose.yml | head -n 1)"
+          if [ "$published" != "$expected" ]; then
+            echo "::error::This release would publish $published, but docker-compose.yml"
+            echo "::error::and install.sh point users at $expected. Nobody would receive it."
+            echo "::error::Either release from the repository that owns $expected, or update"
+            echo "::error::the image name in docker-compose.yml and install.sh to match."
+            exit 1
+          fi
+          echo "Publishing $published, which is what users pull."
 
       - name: Compute image tags
         id: tags
@@ -60,7 +84,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Build amd64 for smoke test (not pushed)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -99,7 +123,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -110,13 +134,19 @@ jobs:
           # ghcr.io/<owner>/<repo>:v1.2.3, plus :latest for non-prerelease tags
           # (see the "Compute image tags" step).
           tags: ${{ steps.tags.outputs.tags }}
+          # Stamps org.opencontainers.image.revision/version into the image, so
+          # `docker image inspect` answers "which commit is this?" without
+          # anyone having to go digging in the filesystem.
+          build-args: |
+            GIT_REVISION=${{ github.sha }}
+            GIT_VERSION=${{ github.ref_name }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Attach in-toto SLSA provenance to the image manifest in the registry.
           provenance: true
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-name: ghcr.io/${{ steps.image.outputs.repo }}
           subject-digest: ${{ steps.build.outputs.digest }}
@@ -127,7 +157,7 @@ jobs:
         # releases/tag/vX.Y.Z link resolves instead of 404-ing. Notes are
         # auto-generated from the commits since the previous tag; a tag with a
         # hyphen (e.g. v0.2.0-rc1) is marked as a prerelease.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}

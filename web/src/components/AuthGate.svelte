@@ -13,11 +13,12 @@
   } from '../lib/api';
   import { clearSnapshot, hasSnapshot } from '../lib/snapshot';
   import {
-    isPasskeySupported,
+    passkeySupport,
     isCancellation,
     performRegistration,
     performAuthentication,
   } from '../lib/passkey';
+  import type { PasskeySupport } from '../lib/passkey';
   import { safeNext } from '../lib/nextParam';
   import Logo from '../lib/Logo.svelte';
 
@@ -28,11 +29,13 @@
     children,
     initialInvite,
     initialSupported,
+    initialBlocker,
     initialNext,
   }: {
     children: Snippet;
     initialInvite?: string | null;
     initialSupported?: boolean;
+    initialBlocker?: PasskeySupport;
     initialNext?: string | null;
   } = $props();
 
@@ -82,8 +85,47 @@
   }
 
   const invite = untrack(() => initialInvite) ?? parseInvite();
-  const supported = untrack(() => initialSupported) ?? isPasskeySupported();
+  // Why a passkey can't be created here, resolved once at boot. `initialSupported`
+  // is the older boolean seed, kept so existing callers/tests keep working.
+  const blocker: PasskeySupport = untrack(() => {
+    if (initialBlocker) return initialBlocker;
+    if (initialSupported === true) return 'ok';
+    if (initialSupported === false) return 'unsupported';
+    return passkeySupport();
+  });
+  const supported = blocker === 'ok';
   const storedToken = untrack(() => getToken());
+
+  // What to say for each blocker. Every one of these used to render as "this
+  // browser can't create a passkey", which is a misdiagnosis in two of the three
+  // cases: on a home-network address the device is perfectly capable and the
+  // *address* is the problem. Each line below has exactly one next step.
+  const BLOCKED_COPY: Record<
+    Exclude<PasskeySupport, 'ok'>,
+    { lead: string; command?: string; hint: string }
+  > = {
+    'insecure-context': {
+      lead: "you can use the list from here, but this address can't create an account — browsers only make passkeys over https or on localhost.",
+      command: 'trug share',
+      hint: 'run that on the machine trug is on, and open the link it prints. the "not secure" chip your browser shows is expected on a home-network address.',
+    },
+    'hostname-is-ip': {
+      lead: "trug is running on this machine, but passkeys can't be made against an IP address.",
+      hint: 'open localhost instead — same trug, same port.',
+    },
+    // Secure, so the connection is fine, but still an IP — someone put a proxy
+    // or a certificate in front of a home-network address. `localhost` is no use
+    // here: on the phone reading this, localhost is the phone.
+    'hostname-is-lan-ip': {
+      lead: "this address is an IP, and passkeys can't be made against one — even over https.",
+      hint: 'the box needs a name. `tailscale serve` is the quickest, then `trug set-origin` with the name it prints. until then the list works from here, it just has no accounts.',
+    },
+    unsupported: {
+      lead: "this browser doesn't support passkeys.",
+      hint: 'paste an access token to open your list, or open trug on a device with Face ID, Touch ID, or a security key to create an account.',
+    },
+  };
+  const blocked = supported ? null : BLOCKED_COPY[blocker as Exclude<PasskeySupport, 'ok'>];
 
   // Signed in when a stored bearer VALIDATES or the cookie probe passes. Both are
   // async; until they settle we hold on a quiet resolving state (unless an
@@ -124,6 +166,12 @@
   // server's claimable probe; a failed probe leaves this false and the gate
   // behaves exactly as before.
   let unclaimed = $state(false);
+
+  // Whether to actually LEAD with the bootstrap token. An unclaimed instance
+  // opened where no passkey can be created is still unclaimed, but the claim
+  // can't be completed from here — so the address gets explained instead, and
+  // the field stays labelled as the ordinary access token it can still accept.
+  const claimPrompt = $derived(unclaimed && supported);
 
   // Passkey sign-in is a live challenge-response with the server, so it can't
   // work offline. Track connectivity reactively to disable the sign-in paths
@@ -199,8 +247,13 @@
 
   // Unsupported-invite dead-end: strip #invite so it doesn't linger in the URL
   // (mirrors the scrub the supported path does after a successful enrolment).
+  //
+  // Only for 'unsupported', NOT for the address-related blockers. Those fire on
+  // exactly the address `trug share` hands out, and the remedy is to open the
+  // invite somewhere else — so scrubbing it would destroy the one thing the
+  // copy is asking them to forward, with no way to get it back.
   $effect(() => {
-    if (invite && !supported) scrubHash();
+    if (invite && blocker === 'unsupported') scrubHash();
   });
 
   function scrubHash() {
@@ -210,12 +263,37 @@
   }
 
   function friendly(err: unknown): string {
-    // An attempt that failed while offline gets the plain explanation rather
+    if (isCancellation(err)) return 'The passkey prompt was dismissed. Try again when ready.';
+    // An ApiError is proof the server answered, so it is never an offline
+    // problem however `navigator.onLine` feels about it. That flag gets stuck
+    // false on captive portals and missed events (see the online listener
+    // above), and relabelling a confirmed rejection as "you're offline" sends
+    // someone to stand nearer the router while the button that would fix it is
+    // disabled by the same stale flag.
+    if (err instanceof ApiError) return apiFailure(err);
+    // Anything else that failed while offline gets the plain explanation rather
     // than the network's cryptic error — the cause is simply no connection.
     if (typeof navigator !== 'undefined' && !navigator.onLine) return OFFLINE_MESSAGE;
-    if (isCancellation(err)) return 'The passkey prompt was dismissed. Try again when ready.';
     if (err instanceof Error && err.message) return err.message;
     return 'Something went wrong. Try again.';
+  }
+
+  // The server's ceremony-verification failure is the same 400 whether the
+  // attestation was malformed or — far more often on a first deploy — the
+  // server's TRUG_ORIGIN/TRUG_RP_ID don't match the address the browser is on.
+  // The raw detail ("Passkey verification failed") is true and useless, so name
+  // the likely cause and the one command that confirms it. Everything else
+  // renders the server's own words, which are written for the person reading.
+  function apiFailure(err: ApiError): string {
+    if (err.status === 400 && /passkey verification failed/i.test(err.message)) {
+      return (
+        "the passkey was rejected by the server's settings, not by your device. " +
+        'usually the address you are on and the origin trug is configured for ' +
+        'disagree — run `trug status` on the machine running trug, and fix ' +
+        'whatever it names with `trug set-origin`.'
+      );
+    }
+    return err.message || 'Something went wrong. Try again.';
   }
 
   async function createPasskey() {
@@ -292,20 +370,9 @@
     // The boot probe already answered for the first-run gate, so trust it: no
     // second round-trip, and no second chance to hit the probe's rate limit on
     // the one path a new deployer depends on.
-    if (unclaimed) {
-      bootstrapToken = token;
-      claiming = true;
-      checking = false;
-      return;
-    }
+    let claimable = unclaimed;
     try {
-      const state = await api.auth.bootstrapState();
-      if (state.claimable) {
-        bootstrapToken = token;
-        claiming = true;
-        checking = false;
-        return;
-      }
+      if (!claimable) claimable = (await api.auth.bootstrapState()).claimable;
     } catch (err) {
       // Throttled: say so. Reporting "that token wasn't accepted" here would be
       // a flat lie about a possibly-correct token, on an instance they may have
@@ -323,7 +390,20 @@
       return;
     }
     checking = false;
-    error = INVALID_TOKEN_MESSAGE;
+    if (!claimable) {
+      error = INVALID_TOKEN_MESSAGE;
+      return;
+    }
+    // Claimable — so this is the bootstrap token. Divert to the claim panel,
+    // unless no passkey can be created here: the panel's only action is a
+    // registration ceremony, so from a blocked address that divert is the exact
+    // dead end this pre-flight exists to close. Name the address instead.
+    if (blocked) {
+      error = `${blocked.lead} ${blocked.hint}`.trim();
+      return;
+    }
+    bootstrapToken = token;
+    claiming = true;
   }
 
   // Leave the first-account claim panel and return to the normal gate, dropping
@@ -431,8 +511,10 @@
               {busy ? 'creating…' : 'create your passkey'}
             </button>
           </form>
-        {:else}
-          <p>this browser can't create a passkey. open trug on a device with Face ID, Touch ID, or a security key to create the first account.</p>
+        {:else if blocked}
+          <p>{blocked.lead}</p>
+          {#if blocked.command}<p><code>{blocked.command}</code></p>{/if}
+        {#if blocked.hint}<p>{blocked.hint}</p>{/if}
         {/if}
         <!-- Escape hatch out of claim limbo: return to the normal gate (sign in
              with a passkey / use an invite) and drop the held bootstrap token. -->
@@ -456,12 +538,26 @@
         <button type="button" class="primary" onclick={createPasskey} disabled={busy || !online}>
           {busy ? 'creating…' : 'create your passkey'}
         </button>
-      {:else if showInvite && !supported}
-        <!-- invite but no passkey support: fall back to explaining -->
-        <p>this browser can't create a passkey. open the invite on a device with Face ID, Touch ID, or a security key.</p>
+      {:else if showInvite && blocked}
+        <!-- invite, but this address or browser can't enrol one: name which -->
+        <p>{blocked.lead}</p>
+        {#if blocked.command}<p><code>{blocked.command}</code></p>{/if}
+        {#if blocked.hint}<p>{blocked.hint}</p>{/if}
         {#if error}<p class="error" role="alert">{error}</p>{/if}
+        {#if !online}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
+      {:else if blocked}
+        <!-- (a2) no passkey possible here. This outranks the unclaimed branch (a3)
+             below: on a blocked address the bootstrap token cannot be spent, so
+             leading with "paste it" would send someone into a ceremony that
+             cannot finish. During a trial install this is the normal state for
+             weeks, not an edge case. -->
+        <p>{blocked.lead}</p>
+        {#if blocked.command}<p><code>{blocked.command}</code></p>{/if}
+        {#if blocked.hint}<p>{blocked.hint}</p>{/if}
+        {#if error}<p class="error" role="alert">{error}</p>{/if}
+        {#if !online}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
       {:else if unclaimed}
-        <!-- (a2) first run: nobody has claimed this instance yet. There is no
+        <!-- (a3) first run: nobody has claimed this instance yet. There is no
              account to sign in to, so lead with the bootstrap token (the form
              below renders for this state) and answer "where do I find it?"
              right here — that question is the whole of the first-run cliff. -->
@@ -473,7 +569,7 @@
           <p>deployed on Railway? it's <code>TRUG_BOOTSTRAP_TOKEN</code> in your service's Variables tab.</p>
           <p>self-hosting with Docker? it's printed in the container logs on first boot.</p>
         </div>
-      {:else if supported}
+      {:else}
         <!-- (b) returning user: discoverable sign-in, quiet token fallback -->
         <p>welcome back.</p>
         {#if error}<p class="error" role="alert">{error}</p>{/if}
@@ -486,23 +582,18 @@
             use an access token
           </button>
         {/if}
-      {:else}
-        <!-- (c) unsupported browser: token path with explanation -->
-        <p>this browser doesn't support passkeys. paste an access token to open your list.</p>
       {/if}
 
-      {#if !resolving && !claiming && (showToken || unclaimed)}
+      {#if !resolving && !claiming && (showToken || claimPrompt)}
         <form onsubmit={submitToken}>
-          <!-- The unclaimed branch prints its own offline line; don't double up. -->
-          {#if !online && !supported && !unclaimed}<p class="offline" role="status">{OFFLINE_MESSAGE}</p>{/if}
           <input
             type="password"
             bind:value={tokenValue}
-            placeholder={unclaimed ? 'bootstrap token' : 'access token'}
-            aria-label={unclaimed ? 'Bootstrap token' : 'Access token'}
+            placeholder={claimPrompt ? 'bootstrap token' : 'access token'}
+            aria-label={claimPrompt ? 'Bootstrap token' : 'Access token'}
             autocomplete="off"
             autocapitalize="off"
-            aria-invalid={!!error && (showToken || unclaimed)}
+            aria-invalid={!!error && (showToken || claimPrompt)}
             oninput={() => (error = null)}
           />
           <button type="submit" class="secondary" disabled={!tokenValue.trim() || checking || !online}>

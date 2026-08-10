@@ -11,6 +11,7 @@ services:
     # ghcr.io/maxdraki/trug — run `docker compose pull` first (or `up --pull
     # always`). The `image:` tag names what gets pulled and what a from-source
     # build is tagged as; `build: .` is the from-source path.
+    # See docs/install.md for the walkthrough, docs/configuration.md for settings.
     image: ghcr.io/maxdraki/trug:latest
     build: .
     ports:

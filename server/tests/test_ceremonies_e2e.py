@@ -123,6 +123,41 @@ def test_e2e_bootstrap_first_run_claim():
     assert r2.status_code == 403
 
 
+def test_e2e_bootstrap_origin_mismatch_says_what_to_check():
+    """The most likely first-deploy failure: TRUG_ORIGIN/TRUG_RP_ID don't match
+    the address the browser is on. The ceremony verifies against the server's
+    origin and fails, and the only thing the deployer sees is this detail — so
+    it has to be distinguishable from the other 400s on the same route rather
+    than a flat "Registration failed"."""
+    c, app = make_client(seed=())
+
+    r = c.post("/auth/bootstrap/claim/options", json={"name": "alice"}, headers=_boot_headers())
+    assert r.status_code == 200
+    # An authenticator that signed for a DIFFERENT origin — exactly what a
+    # mismatched TRUG_ORIGIN produces.
+    device = SoftwareAuthenticator(origin="https://trug.example.com")
+    cred = device.make_credential(r.json())
+
+    r = c.post(
+        "/auth/bootstrap/claim/verify",
+        json={"name": "alice", "credential": cred},
+        headers=_boot_headers(),
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail == "Passkey verification failed"
+    # Distinguishable from the other 400s the same route can return, so the
+    # client can map it to something actionable.
+    assert detail != "Name required"
+    assert detail != "Unknown or used challenge"
+    assert app.state.auth_repo.user_count() == 0
+    # The web gate matches this exact phrase to replace it with the origin/RP-ID
+    # guidance (AuthGate.svelte's apiFailure). Changing the wording here without
+    # changing it there degrades silently to echoing the raw detail, on the one
+    # path a first-time deployer depends on — so the contract is pinned.
+    assert "passkey verification failed" in detail.lower()
+
+
 # ---------------------------------------------------------------------------
 # Invite -> register a second device
 # ---------------------------------------------------------------------------

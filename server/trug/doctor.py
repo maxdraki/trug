@@ -133,6 +133,20 @@ def _is_ip(host: str) -> bool:
         return False
 
 
+def _is_loopback(host: str) -> bool:
+    """True for anything a browser treats as a potentially-trustworthy local
+    address, not just the three spellings people usually type.
+
+    All of 127.0.0.0/8 counts, which matters because Debian and Raspberry Pi OS
+    map the machine's own hostname to ``127.0.1.1`` — so that address is what a
+    copy-paste from the box's own resolution produces. Matching a fixed set of
+    strings sent those users off to install Tailscale to fix a typo."""
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host in _LOCALHOSTS
+
+
 def _host_matches_rp_id(host: str, rp_id: str) -> bool:
     """WebAuthn RP-ID rule: the origin host must equal the RP ID or be a
     subdomain of it (RP ID is a registrable parent)."""
@@ -235,8 +249,60 @@ def _origin_checks(settings: Settings) -> list[Check]:
                 )
             )
 
-    # Only meaningful when the origin parsed and the RP ID is a plain host.
-    if origin_ok and not issues and not _is_ip(bare):
+    # An IP in TRUG_ORIGIN is its own failure, distinct from the RP ID being one:
+    # the ceremony *starts* (loopback is a secure context, so the browser is
+    # happy) and then dies on the RP ID, which WebAuthn forbids being an IP. The
+    # two cases below have completely different answers, and neither is the
+    # "set TRUG_RP_ID to the origin host" that rp_id.matches_origin would
+    # otherwise suggest — that advice fails the very next check.
+    if origin_ok and _is_ip(host):
+        if _is_loopback(host):
+            # Same machine, wrong spelling. One word fixes it, so hand over the
+            # exact env — port and scheme preserved.
+            fixed = f"{scheme}://localhost:{_port}" if _port else f"{scheme}://localhost"
+            checks.append(
+                Check(
+                    "origin.host_is_ip",
+                    FAIL,
+                    f"TRUG_ORIGIN points at loopback by IP ({host}). That IS a "
+                    "secure context, so the browser starts the passkey ceremony "
+                    "and then fails on the RP ID — WebAuthn does not allow an IP "
+                    f"there. Use localhost instead: {fixed}.",
+                    {"origin": origin, "host": host, "loopback": True},
+                    {"env": {"TRUG_ORIGIN": fixed, "TRUG_RP_ID": "localhost"}},
+                )
+            )
+        else:
+            # No env edit fixes this, so deliberately no remedy: an IP cannot be
+            # an RP ID and a LAN address cannot be renamed into one.
+            checks.append(
+                Check(
+                    "origin.host_is_ip",
+                    FAIL,
+                    f"TRUG_ORIGIN is an IP address ({host}), so no account can be "
+                    "created here — WebAuthn does not allow an IP as the RP ID, "
+                    "and there is no setting that changes that. Two ways on: share "
+                    "the list without accounts (`trug share` prints a link anyone "
+                    "on the network can open), or give the box a real HTTPS name "
+                    "(`tailscale serve --bg 8000`) and point TRUG_ORIGIN at it.",
+                    {"origin": origin, "host": host, "loopback": False},
+                )
+            )
+    else:
+        checks.append(
+            Check(
+                "origin.host_is_ip",
+                OK,
+                f"TRUG_ORIGIN host is a name, not an IP: {host}" if origin_ok else
+                "TRUG_ORIGIN host not checked for an IP (the origin did not parse)",
+                {"origin": origin, "host": host},
+            )
+        )
+
+    # Only meaningful when the origin parsed and both sides are plain hosts. An
+    # IP origin is handled above; suggesting TRUG_RP_ID=<that IP> here would be
+    # advice the rp_id.not_ip check immediately fails you for taking.
+    if origin_ok and not issues and not _is_ip(bare) and not _is_ip(host):
         if _host_matches_rp_id(host, bare):
             checks.append(
                 Check(
@@ -260,7 +326,7 @@ def _origin_checks(settings: Settings) -> list[Check]:
             )
 
     # Secure context: passkeys need HTTPS unless the host is localhost.
-    if origin_ok and scheme == "http" and host not in _LOCALHOSTS:
+    if origin_ok and scheme == "http" and not _is_loopback(host):
         checks.append(
             Check(
                 "origin.secure_context",
@@ -333,9 +399,48 @@ def _observed_host_check(settings: Settings, observed: list[dict]) -> Check:
             "No distinct external hosts observed yet (nothing to compare)",
             {"configured": configured, "observed": []},
         )
-    # Suggest the most-recently-seen mismatching host (observed is last-seen
+    # Being reached on a bare IP is the share path working, not a mistake:
+    # `trug share` hands out http://<lan-ip>:8000/?token=… and everyone in the
+    # house loads it. Warning would make `trug status` exit 1 on every healthy
+    # trial install, and the remedy this used to offer — TRUG_RP_ID=<that IP> —
+    # is advice WebAuthn forbids and rp_id.not_ip fails you for taking.
+    named = [o for o in mismatches if not _is_ip(o["host"])]
+    if not named:
+        ips = ", ".join(o["host"] for o in mismatches)
+        detail = {"configured": configured, "observed": [o["host"] for o in mismatches]}
+        # "Also reached by IP" is only benign when the configured origin is
+        # being reached as well. If it never has been, the name is dead — a
+        # Tailscale Serve that stopped, a DNS record that went away — and
+        # reporting that as healthy hides an instance nobody can enrol on.
+        # A loopback origin is never recorded by the middleware (it skips
+        # localhost), so "was the configured host also seen?" can't be asked
+        # there — and IP traffic to a localhost-configured box is exactly the
+        # ordinary share path on a fresh install.
+        if _is_loopback(configured) or any(o["host"] == configured for o in observed):
+            return Check(
+                "origin.observed_host_mismatch",
+                OK,
+                f"Also reached by IP ({ips}) — expected if you are sharing the "
+                "list with `trug share`. Accounts still have to be created on "
+                f"the configured origin ({configured}); an IP can never be the "
+                "RP ID.",
+                detail,
+            )
+        return Check(
+            "origin.observed_host_mismatch",
+            WARN,
+            f"Trug has never been reached on its configured origin "
+            f"({configured}) — only by IP ({ips}). If you have given the box a "
+            "name, it is not arriving here: check the proxy or tunnel in front "
+            "of Trug. Until it does, nobody can create an account.",
+            # Deliberately no remedy: no setting fixes a name that isn't
+            # resolving, and suggesting the IP is the advice rp_id.not_ip fails.
+            detail,
+        )
+
+    # Suggest the most-recently-seen mismatching NAME (observed is last-seen
     # first). Tunnels/proxies terminate TLS, so the corrected origin is https.
-    top = mismatches[0]
+    top = named[0]
     host = top["host"]
     return Check(
         "origin.observed_host_mismatch",

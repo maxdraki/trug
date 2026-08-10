@@ -152,6 +152,71 @@ def test_rp_id_registrable_parent_matches():
     assert checks["rp_id.matches_origin"].status == doctor.OK
 
 
+def test_origin_host_ip_loopback_says_use_localhost():
+    # `trug` served on http://127.0.0.1:8000 IS a secure context, so the browser
+    # starts the ceremony and then dies on the RP ID. The remedy is one word.
+    checks = _ids(doctor._origin_checks(_settings(TRUG_ORIGIN="http://127.0.0.1:8000")))
+    c = checks["origin.host_is_ip"]
+    assert c.status == doctor.FAIL
+    assert "localhost" in c.message
+    assert c.remedy["env"] == {
+        "TRUG_ORIGIN": "http://localhost:8000",
+        "TRUG_RP_ID": "localhost",
+    }
+
+
+def test_origin_host_ip_loopback_ipv6_says_use_localhost():
+    checks = _ids(doctor._origin_checks(_settings(TRUG_ORIGIN="http://[::1]:8000")))
+    c = checks["origin.host_is_ip"]
+    assert c.status == doctor.FAIL
+    assert c.remedy["env"]["TRUG_ORIGIN"] == "http://localhost:8000"
+
+
+def test_origin_host_ip_debian_self_hostname_is_still_loopback():
+    # Debian and Raspberry Pi OS map the box's own hostname to 127.0.1.1, so this
+    # is what a copy-paste from the machine's own resolution gives you. It is
+    # loopback and a secure context; treating it as a LAN address sent people off
+    # to install Tailscale to fix a typo.
+    checks = _ids(doctor._origin_checks(_settings(TRUG_ORIGIN="http://127.0.1.1:8000")))
+    c = checks["origin.host_is_ip"]
+    assert c.status == doctor.FAIL
+    assert c.remedy["env"]["TRUG_ORIGIN"] == "http://localhost:8000"
+    # …and it must not also be accused of being an insecure context.
+    assert checks["origin.secure_context"].status == doctor.OK
+
+
+def test_origin_host_ip_lan_has_no_rename_remedy():
+    # A LAN address can't be renamed into working — there is no env edit that
+    # fixes it, so offering one would be a lie. Point at the real answers.
+    checks = _ids(
+        doctor._origin_checks(
+            _settings(TRUG_ORIGIN="http://192.168.1.5:8000", TRUG_RP_ID="192.168.1.5")
+        )
+    )
+    c = checks["origin.host_is_ip"]
+    assert c.status == doctor.FAIL
+    assert c.remedy is None
+    assert "trug share" in c.message
+
+
+def test_origin_host_ip_absent_when_origin_is_a_name():
+    checks = _ids(doctor._origin_checks(_settings(TRUG_ORIGIN="https://trug.example.com",
+                                                 TRUG_RP_ID="trug.example.com")))
+    assert checks["origin.host_is_ip"].status == doctor.OK
+
+
+def test_rp_id_mismatch_never_recommends_an_ip_as_rp_id():
+    # The old remedy read TRUG_RP_ID=127.0.0.1 straight off the origin host —
+    # advice that the very next check (rp_id.not_ip) fails you for taking.
+    # With an IP origin the match check isn't meaningful, so it stands down and
+    # origin.host_is_ip carries the guidance instead.
+    checks = _ids(doctor._origin_checks(_settings(TRUG_ORIGIN="http://127.0.0.1:8000")))
+    assert "rp_id.matches_origin" not in checks
+    for c in checks.values():
+        rp = (c.remedy or {}).get("env", {}).get("TRUG_RP_ID")
+        assert rp is None or not doctor._is_ip(rp), f"{c.id} recommends an IP as the RP ID"
+
+
 def test_http_non_localhost_secure_context_fails():
     checks = _ids(
         doctor._origin_checks(
@@ -185,6 +250,69 @@ def test_observed_host_mismatch_warns_with_exact_remedy():
         "TRUG_ORIGIN": "https://trug.tail1234.ts.net",
         "TRUG_RP_ID": "trug.tail1234.ts.net",
     }
+
+
+def test_observed_lan_ip_is_the_share_path_not_a_misconfiguration():
+    # Everyone on a trial install browses http://<lan-ip>:8000 via `trug share`,
+    # so the middleware records it. Warning about that would make `trug status`
+    # exit 1 on every healthy trial install — and the remedy it used to hand over
+    # was TRUG_RP_ID=<that IP>, which WebAuthn forbids and rp_id.not_ip fails you
+    # for. Advice that makes things worse is worse than no advice.
+    settings = _settings(TRUG_ORIGIN="http://localhost:8000", TRUG_RP_ID="localhost")
+    observed = [{"host": "192.168.4.134", "hit_count": 8}]
+    c = doctor._observed_host_check(settings, observed)
+    assert c.status == doctor.OK
+    assert c.remedy is None
+    assert "trug share" in c.message
+
+
+def test_configured_name_never_reached_is_not_healthy():
+    # Tailscale Serve stops, or the name stops resolving, so every request now
+    # arrives by IP. Treating that as the share path would report a green
+    # instance on which nobody can create an account and the configured name is
+    # simply dead. The share path is distinguishable: there, the configured host
+    # is being reached too.
+    settings = _settings(
+        TRUG_ORIGIN="https://trug.tail1234.ts.net", TRUG_RP_ID="trug.tail1234.ts.net"
+    )
+    c = doctor._observed_host_check(settings, [{"host": "192.168.1.42", "hit_count": 12}])
+    assert c.status == doctor.WARN
+    assert "never been reached" in c.message
+    # No remedy env: there is no setting that fixes a name that doesn't resolve.
+    assert c.remedy is None
+
+
+def test_share_path_is_ok_once_the_configured_host_is_also_seen():
+    settings = _settings(
+        TRUG_ORIGIN="https://trug.tail1234.ts.net", TRUG_RP_ID="trug.tail1234.ts.net"
+    )
+    observed = [
+        {"host": "192.168.1.42", "hit_count": 12},
+        {"host": "trug.tail1234.ts.net", "hit_count": 3},
+    ]
+    assert doctor._observed_host_check(settings, observed).status == doctor.OK
+
+
+def test_observed_name_mismatch_still_warns_with_a_usable_remedy():
+    settings = _settings(TRUG_ORIGIN="http://localhost:8000", TRUG_RP_ID="localhost")
+    observed = [{"host": "trug.tail1234.ts.net", "hit_count": 3}]
+    c = doctor._observed_host_check(settings, observed)
+    assert c.status == doctor.WARN
+    assert c.remedy["env"]["TRUG_RP_ID"] == "trug.tail1234.ts.net"
+
+
+def test_observed_host_mismatch_never_recommends_an_ip():
+    # Belt and braces across every shape: a mixed list must not fall back to
+    # suggesting the IP either.
+    settings = _settings(TRUG_ORIGIN="http://localhost:8000", TRUG_RP_ID="localhost")
+    for observed in (
+        [{"host": "192.168.1.5", "hit_count": 2}],
+        [{"host": "10.0.0.9", "hit_count": 1}, {"host": "192.168.1.5", "hit_count": 4}],
+        [{"host": "::1", "hit_count": 1}],
+    ):
+        c = doctor._observed_host_check(settings, observed)
+        rp = (c.remedy or {}).get("env", {}).get("TRUG_RP_ID")
+        assert rp is None or not doctor._is_ip(rp)
 
 
 def test_observed_host_localhost_not_recorded():
