@@ -33,6 +33,16 @@ updates:
       # output. Kept out of Dependabot to avoid no-op noise.
       - dependency-name: "@tabler/icons"
       - dependency-name: "@catppuccin/palette"
+      # TypeScript 7 is the native port, and svelte-check 4.x only supports it
+      # as a DUAL install — TS 6 kept as `typescript`, TS 7 aliased as
+      # `@typescript/native`, plus a --tsgo flag on every invocation. A plain
+      # bump makes svelte-check refuse to start (it exits with exactly that
+      # instruction), so this is a migration to schedule, not a version to take.
+      # Note `vite build` passes on TS 7 regardless — it transpiles without
+      # type-checking — so svelte-check is the only thing that catches it.
+      # Revisit when svelte-check supports TS 7 as a single install.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # --- GitHub Actions used by the workflows -----------------------------
   - package-ecosystem: "github-actions"

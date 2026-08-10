@@ -150,12 +150,19 @@ jobs:
             if [ "$i" = "60" ]; then echo "::error::container never became healthy"; exit 1; fi
             sleep 1
           done
-          curl -fsS http://localhost:8000/ | grep -q "<title>Trug</title>" \
-            || { echo "::error::SPA not served at /"; exit 1; }
-          # trug-doctor exits non-zero on warnings (expected in a bare
-          # container with no TRUG_ORIGIN), so assert it emits valid JSON
-          # rather than a clean exit — this proves the console script shipped.
-          docker exec trug-ci /app/.venv/bin/trug-doctor --json --redact \
+          # Captured, not piped. Both of these were correct only because
+          # GitHub's default shell omits `pipefail` — adding `shell: bash`
+          # anywhere above, which looks like tidying, would break them:
+          # `grep -q` SIGPIPEs curl once the page exceeds a pipe buffer, and
+          # trug-doctor's exit 1 on warnings (expected here, and the reason this
+          # asserts on the JSON rather than the status) would fail the step.
+          body="$(curl -fsS http://localhost:8000/)"
+          case "$body" in
+            *"<title>Trug</title>"*) ;;
+            *) echo "::error::SPA not served at /"; exit 1 ;;
+          esac
+          doctor_json="$(docker exec trug-ci /app/.venv/bin/trug-doctor --json --redact || true)"
+          printf '%s' "$doctor_json" \
             | python3 -c "import json,sys; json.load(sys.stdin)['status']" \
             || { echo "::error::trug-doctor missing or not emitting valid JSON"; exit 1; }
 
@@ -223,6 +230,25 @@ jobs:
     # has a compiler or a type-checker to catch a typo'd variable. shellcheck is
     # that check; bats covers the behaviour that would otherwise only be found
     # by someone's broken Saturday.
+    #
+    # A macOS leg belongs here and is deliberately NOT here yet. These scripts
+    # are written on BSD userland and run on GNU userland, and for a while each
+    # was only exercised on one of the two — which is why three divergences in
+    # one afternoon were all found the expensive way (`stat -f` vs `stat -c`,
+    # bats 1.10 vs 1.14 on whether a failing `[[ ]]` fails a test, shellcheck
+    # 0.10 vs 0.11 on SC2015).
+    #
+    # The first attempt hung: on a GitHub macOS runner the suite produced no
+    # output at all and left orphaned `tr` and `cat` processes, which points at
+    # the two tests that pipe the installer into a shell — if the consuming
+    # shell exits early, `cat` blocks forever on a full pipe and the test never
+    # returns. Not reproducible locally, and not worth blocking a release on, so
+    # it is tracked separately rather than left flaky here.
+    #
+    # The suite takes ~25s and stubs everything it talks to, so anything near
+    # this cap is a hang. Without the bound a hung job sits for six hours and
+    # produces NO log, because logs only become fetchable once a job ends.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -244,12 +270,26 @@ jobs:
           shellcheck --version
           shellcheck -s sh install.sh
           shellcheck bin/trug
+          shellcheck -s bash tests/shell/helpers.bash
 
       - name: Install bats-core
-        run: sudo apt-get update && sudo apt-get install -y bats
+        # Pinned, for the same reason shellcheck is. `apt-get install bats` is
+        # 1.10 on ubuntu-24.04 and would jump when the runner image rolls;
+        # Homebrew's is 1.14 today. Those two disagree about whether a failing
+        # `[[ ]]` fails a test, which is exactly the kind of silent semantic
+        # change that must not arrive without a commit.
+        env:
+          BATS_VERSION: v1.11.1
+        run: |
+          git clone --depth 1 --branch "$BATS_VERSION" https://github.com/bats-core/bats-core.git /tmp/bats-core
+          sudo /tmp/bats-core/install.sh /usr/local
+          bats --version
 
       - name: Test (bats)
-        run: bats tests/shell/
+        # --timing so a slow test is identifiable, and --print-output-on-failure
+        # so a failure arrives with the command output rather than just a line
+        # number.
+        run: bats --timing --print-output-on-failure tests/shell/
 
   install:
     name: install.sh end-to-end (real docker)

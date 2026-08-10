@@ -59,13 +59,15 @@ require_install() {
 # Mirrors install.sh's env_value. Kept separate on purpose: install.sh is piped
 # from curl and cannot source this file, so the pair is maintained by hand.
 #
-# `q` inside the address block rather than `| head -n 1`: under `set -o pipefail`
-# head closing the pipe early makes sed die of SIGPIPE and the whole command exit
-# 141. The obvious spelling — `s/^KEY=//p;/^KEY=/q` — silently returns EVERY
-# match, because the substitution has already removed the prefix the address is
-# looking for. With a duplicated key that put a newline in the middle of the
-# share URL and the QR built from it.
-env_value() { sed -n "/^$1=/{s///p;q;}" "$TRUG_HOME/.env"; }
+# The LAST match, because that is what Compose's `env_file` uses. Appending a
+# line to override an earlier one is an ordinary hand-edit and it genuinely
+# works — so a reader that took the first would hand out a token the running
+# server rejects, with both sides looking correct.
+#
+# `tail`, not `head`: under `set -o pipefail` head closes the pipe early and sed
+# dies of SIGPIPE, exiting 141. tail reads to the end, so there is nothing to
+# close early.
+env_value() { sed -n "s/^$1=//p" "$TRUG_HOME/.env" | tail -n 1; }
 
 # Rewrite one KEY=value in .env, preserving everything around it. Appends when
 # the key isn't there yet, so a hand-trimmed .env still works.
@@ -83,10 +85,17 @@ env_value() { sed -n "/^$1=/{s///p;q;}" "$TRUG_HOME/.env"; }
 # old RP ID if the second fails — a mismatch that breaks every passkey ceremony
 # with no error anywhere, which is the exact state set-origin exists to prevent.
 set_env_values() {
-  local tmp src
+  local tmp src old_umask
+  # umask before anything is created, not a chmod after. mktemp makes its own
+  # file 0600, but the file actually written is "$tmp.work", which `cp` creates
+  # under the ambient umask — 0644, holding all four secrets, until the chmod at
+  # the end. An interrupted set-origin would leave that behind for good.
+  old_umask="$(umask)"
+  umask 077
   tmp="$(mktemp "$TRUG_HOME/.env.XXXXXX")"
   src="$TRUG_HOME/.env"
   cp "$src" "$tmp.work"
+  umask "$old_umask"
   while [ "$#" -gt 0 ]; do
     local key="$1" value="$2"; shift 2
     if grep -q "^${key}=" "$tmp.work"; then
