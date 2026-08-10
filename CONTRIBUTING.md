@@ -7,9 +7,9 @@ what gets merged: the Saturday-shop test.
 
 ## The Saturday-shop test (read this first)
 
-Trug does one thing: **make Saturday's shop faster for two people in a household.** Every
-feature idea gets held up against *"does this help alice and bob get the weekly shop
-done?"* If the answer is no, it goes to the parking lot — no matter how nice the idea is.
+Trug does one thing: **make Saturday's shop faster for one household.** Every feature idea gets
+held up against *"does this make Saturday's shop faster?"* If the answer is no, it goes to the
+parking lot — no matter how nice the idea is.
 
 The non-goals are firm boundaries, not open questions: no recipes or meal planning, no
 passwords or admin tiers (a flat, invite-based passkey roster only), no multi-tenancy, no
@@ -60,7 +60,7 @@ docker compose up
 ```
 
 Passkeys work on plain `localhost` with no config, so you can develop the full sign-in flow
-without a domain or HTTPS. (See the README for why a real deployment needs an HTTPS name.)
+without a domain or HTTPS. ([Why a real deployment needs an HTTPS name](docs/remote-access.md).)
 
 ## How we work
 

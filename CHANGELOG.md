@@ -7,77 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.5] - 2026-08-10
+### Added
+
+- A one-line installer (`install.sh`): `curl -fsSL .../install.sh | sh`. It writes `~/.trug`,
+  generates all four tokens up front, pulls the image, starts it, waits for a real answer on
+  `/healthz`, installs the `trug` command, and prints the bootstrap token. It never installs
+  Docker — it names your options and stops — and re-running it is the repair path: no live token
+  is regenerated and `data/` is left alone. `TRUG_HOME`, `TRUG_PORT`, `TRUG_REF`,
+  `TRUG_HEALTH_TIMEOUT`, `TRUG_IMAGE` and `NO_COLOR` override the defaults. A 32-bit Raspberry Pi
+  OS is caught before anything is pulled.
+- A `trug` command with six verbs: `up`, `down`, `status`, `logs`, `share`, `set-origin`.
+  `trug share` prints a LAN link with the MCP token in it plus a terminal QR; `trug set-origin`
+  writes `TRUG_ORIGIN`, derives `TRUG_RP_ID`, restarts and checks the result, refusing a bare
+  hostname, a plain-`http` origin, a URL with a path, or an IP address. `status` and `set-origin`
+  pass `trug-doctor`'s exit code through.
+- `trug-doctor` check `origin.host_is_ip`. For loopback-by-IP it hands over the exact fix; for a
+  LAN IP it offers no remedy env, because no setting fixes it, and points at `trug share` or a
+  real name instead.
+- `docs/remote-access.md`, covering how other people actually reach your instance: the
+  zero-setup LAN share link, Tailscale Serve, your own domain with a private-address DNS record,
+  and Cloudflare Tunnel.
+- Raspberry Pi install notes: the 64-bit OS requirement, the `docker` group logout, and keeping
+  the database off the SD card.
 
 ### Fixed
 
-- Deploying to a platform that picks its own port — Railway, Render, Fly,
-  Heroku — failed every healthcheck with "service unavailable", because the
-  container always listened on 8000 regardless of the `PORT` the platform
-  assigned. It now binds `PORT` when one is set, falling back to 8000
-  otherwise, so Docker Compose and Raspberry Pi installs are unchanged. A
-  non-numeric `PORT` is now rejected with a clear message instead of being
-  passed through to the server's command line.
-- The container's healthcheck follows `PORT` too, so it can no longer report a
-  perfectly healthy container as unhealthy. Compose publishes the same port it
-  serves on, so setting `PORT` in `.env` can't leave you with a running
-  container that nothing can reach.
+- `trug share` warns, when `ufw` is running on Linux, that ufw is *not* protecting the published
+  port. Docker forwards published ports past ufw's rules entirely, so a default-deny policy gives
+  a false sense of what is reachable. The `DOCKER-USER` chain is where a real restriction goes.
+- `trug share` picks a real private-range address on a real interface before falling back to the
+  routing table. The default route's source is the VPN's address whenever a VPN carries it — a
+  Tailscale exit node, or a full-tunnel WireGuard — which answers from the box and nowhere else.
 
-## [0.1.4] - 2026-08-10
-
-### Fixed
-
-- A newly deployed Trug greeted its very first visitor with "welcome back" and
-  a sign-in button that could not work — no account exists yet — while the one
-  thing that does work, pasting the bootstrap token, was hidden behind a
-  fallback link. A fresh instance now says it hasn't been claimed, leads with
-  the bootstrap-token field, and tells you where to find the token (Railway
-  Variables tab, or the container logs on first boot).
-- Lockout recovery (`trug-doctor recover --reset-bootstrap`) re-opens the
-  first-account claim, but the app still reported the instance as claimed and
-  hid this onboarding — precisely when you need it. It now agrees with the
-  server.
-- Clearer errors while claiming: a mistyped bootstrap token said "this instance
-  was just claimed by someone else" (whose suggested recoveries are impossible
-  on an unclaimed instance), and a throttled or unavailable server could report
-  a perfectly good token as invalid. Both now say what actually went wrong.
-
-## [0.1.3] - 2026-08-09
-
-### Added
-
-- A **Copy list** button in the header: puts the outstanding items on the
-  clipboard, one name per line in shelf order — ready to paste into a
-  supermarket's multi-search box. Shown only where the browser's Clipboard API
-  is available (it needs HTTPS or localhost).
-
-## [0.1.2] - 2026-08-09
-
-### Added
-
-- Settings now has an **About** section with the app version and a link to the
-  project, and the **Devices** list shows when each device was last active (and
-  which one is "this device") so you can tell them apart before revoking one.
-- An **Upgrading** guide in the README (pull the image or rebuild from source;
-  data persists and migrations run automatically).
-- The MCP server advertises its icon (`serverInfo.icons`) and serves a favicon,
-  so clients that support it can show the Trug logo for the connector.
+- A failed passkey ceremony is no longer reported as the bare string "Registration failed". The
+  server returns a distinguishable `Passkey verification failed`, and the gate turns that into the
+  likely cause — the address you're on and the origin Trug is configured for disagree — plus the
+  command that confirms it. This is the most common first-deploy failure, and it used to arrive
+  with no cause and no next step.
+- A confirmed server rejection is never relabelled "you're offline". `navigator.onLine` gets stuck
+  false on captive portals, and an answer from the server is proof it isn't the network.
+- `origin.observed_host_mismatch` no longer warns about being reached on a LAN IP, which is the
+  share link working as designed — it used to make `trug status` exit 1 on every healthy install
+  and suggest an IP as the RP ID.
+- The doctor treats all of `127.0.0.0/8` as loopback, not just the three usual spellings. Debian
+  and Raspberry Pi OS map the machine's own hostname to `127.0.1.1`, which was being diagnosed as
+  a remote address needing HTTPS.
+- The release workflow refuses to publish under an image name that doesn't match the one
+  `docker-compose.yml` and `install.sh` send users to, so a release from a fork can't go green
+  while changing nothing for anyone.
+- The image carries its own OCI labels, including the commit it was built from. They previously
+  came from the base image and named `astral-sh/uv`, so there was no way to tell what a running
+  container actually contained.
 
 ### Changed
 
-- UI polish: a larger settings button, the add-item box reads as the primary
-  action, and aisle headers carry a faint accent wash. Per-row source badges
-  were removed as visual noise.
-
-## [0.1.1] - 2026-08-08
-
-### Fixed
-
-- Coconut milk and coconut cream showed a fruit (apple) icon in Fruit & Veg —
-  the longest-match icon lookup picked `coconut` over `milk`. They now map to
-  the canned-goods icon in the Cupboard aisle, where you actually shop for them.
-  A one-time migration corrects already-added items on upgrade, so you don't
-  need to re-add anything.
+- The sign-in gate now says *why* a passkey can't be created instead of blaming the browser: an
+  insecure address points you at `trug share` and notes the "Not Secure" chip is expected; an IP
+  address tells you to open `localhost`. On a blocked address it no longer starts a claim ceremony
+  it can't finish, and the address explanation outranks the "this trug hasn't been claimed yet"
+  copy.
+- `rp_id.matches_origin` no longer recommends an IP address as the RP ID, which was advice the
+  next check failed you for taking.
+- Docs lead with the one-liner: `docs/install.md` gains a **One command** section ahead of Railway
+  and Compose, remote access rung one is now `trug share`, and the Pi's SSH tunnel is demoted to a
+  footnote — the trial path needs no passkey, so it's no longer a load-bearing step.
+- Restructured the README around the ways in — the one-liner, Railway, Docker, and getting the
+  rest of the household on it — and moved the reference material into `docs/`: install (now
+  including a Raspberry Pi section), remote access, configuration, operations, integrations, and
+  troubleshooting. `docs/restore.md` is folded into `docs/operations.md`.
 
 ## [0.1.0] - 2026-08-08
 
@@ -110,10 +107,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.5...HEAD
-[0.1.5]: https://github.com/maxdraki/trug/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/maxdraki/trug/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/maxdraki/trug/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/maxdraki/trug/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/maxdraki/trug/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/maxdraki/trug/releases/tag/v0.1.0

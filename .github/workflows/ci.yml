@@ -29,10 +29,10 @@ jobs:
     # The test suite must pass with NO LLM_API_KEY set, proving the app's
     # no-key / offline mode works. We deliberately do not set that secret here.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up uv (with Python 3.12)
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
 
@@ -56,12 +56,12 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Node 22 LTS. The repo was developed on Node 26, but the toolchain
       # (vite 8, vitest 4, svelte 5) supports Node 22+, so LTS is used here.
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -90,10 +90,10 @@ jobs:
     # them and fail if the committed copies drifted — catches a forgotten
     # `gen-icons`/`gen-theme` after an icon-map edit or a Tabler/Catppuccin bump.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Node 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -120,13 +120,13 @@ jobs:
     # was only discovered by a self-hoster pulling :latest. Build it on every
     # change and prove the container actually serves.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Build image (amd64, loaded into the local daemon)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
@@ -215,3 +215,120 @@ jobs:
       - name: Container logs (on failure)
         if: failure()
         run: docker logs trug-ci || true; docker logs trug-ci-port || true; docker logs trug-ci-empty || true
+
+  shell:
+    name: shell (shellcheck + bats)
+    runs-on: ubuntu-latest
+    # install.sh and bin/trug are the first code a self-hoster runs, and neither
+    # has a compiler or a type-checker to catch a typo'd variable. shellcheck is
+    # that check; bats covers the behaviour that would otherwise only be found
+    # by someone's broken Saturday.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Lint (shellcheck)
+        # install.sh is POSIX sh on purpose (a Pi's /bin/sh is dash), so it is
+        # checked as `sh` rather than under shellcheck's bash default — which
+        # would happily accept bashisms the installer must not contain.
+        # bin/trug is bash, and its shebang says so.
+        run: |
+          shellcheck --version
+          shellcheck -s sh install.sh
+          shellcheck bin/trug
+
+      - name: Install bats-core
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: Test (bats)
+        run: bats tests/shell/
+
+  install:
+    name: install.sh end-to-end (real docker)
+    runs-on: ubuntu-latest
+    # The bats suite runs against a stubbed docker, so it can prove what the
+    # installer *says* but never that the thing it installs works. This job runs
+    # the actual one-liner against a real daemon: install, health, then the two
+    # verbs a new self-hoster reaches for on day one.
+    #
+    # No macOS counterpart: GitHub's macOS runners ship no Docker daemon.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the image this commit produces
+        # Tagged trug:ci, NOT ghcr.io/maxdraki/trug:latest. The published tag
+        # pulls successfully at any time, so naming the local build after it
+        # would just have `docker compose pull` replace it with the last release
+        # — and the job would then install and test that, passing whatever this
+        # commit did.
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: trug:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run the installer
+        # TRUG_IMAGE runs the image built above; TRUG_LOCAL_SRC takes bin/trug
+        # from this checkout instead of raw.githubusercontent.com/main. Without
+        # both, the job tests what is already released rather than the change in
+        # front of it. The pull of trug:ci fails (nothing by that name in any
+        # registry) and the installer falls back to the local copy, which
+        # exercises the offline-repair path here for free.
+        env:
+          TRUG_LOCAL_SRC: ${{ github.workspace }}
+          TRUG_IMAGE: trug:ci
+        run: sh install.sh
+
+      - name: It is running the image this commit built
+        # Cheap, and it is the assertion that would have caught the bug above.
+        run: |
+          running="$(docker inspect --format '{{.Config.Image}}' trug)"
+          [ "$running" = "trug:ci" ] \
+            || { echo "::error::container is running $running, not the build under test"; exit 1; }
+
+      - name: It installed what it promised
+        run: |
+          [ -d "$HOME/.trug" ] || { echo "::error::installer did not create ~/.trug"; exit 1; }
+          [ -f "$HOME/.trug/.env" ] || { echo "::error::no ~/.trug/.env"; exit 1; }
+          [ -f "$HOME/.trug/docker-compose.yml" ] || { echo "::error::no ~/.trug/docker-compose.yml"; exit 1; }
+          [ -x "$HOME/.local/bin/trug" ] || { echo "::error::the trug command was not installed"; exit 1; }
+          curl -fsS http://localhost:8000/healthz >/dev/null \
+            || { echo "::error::installed trug does not answer on /healthz"; exit 1; }
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: trug status
+        # trug-doctor's exit code passes through: 0 healthy, 1 warnings, 2 broken.
+        # A fresh localhost install warns (no HTTPS origin, no LLM key), so only
+        # 2 — or a crash — is a CI failure.
+        run: |
+          set +e
+          trug status
+          rc=$?
+          set -e
+          [ "$rc" -le 1 ] || { echo "::error::trug status reported a broken install (exit $rc)"; exit 1; }
+
+      - name: trug share prints a joinable link
+        run: |
+          out="$(trug share)"
+          printf '%s\n' "$out"
+          case "$out" in
+            *"?token="*) ;;
+            *) echo "::error::trug share printed no ?token= URL"; exit 1 ;;
+          esac
+          # The link must carry the MCP token, never the one that creates the
+          # first account.
+          boot="$(sed -n 's/^TRUG_BOOTSTRAP_TOKEN=//p' "$HOME/.trug/.env" | head -n 1)"
+          case "$out" in
+            *"$boot"*) echo "::error::trug share leaked the bootstrap token"; exit 1 ;;
+          esac
+
+      - name: Container logs (on failure)
+        if: failure()
+        run: docker compose --project-directory "$HOME/.trug" logs || true

@@ -36,14 +36,84 @@ export function bytesToBase64url(input: ArrayBuffer | Uint8Array): string {
 
 // --- feature detection -------------------------------------------------------
 
-/** True when this browser can create/use passkeys. */
+/**
+ * Why a passkey can't be created here — or `'ok'` when one can.
+ *
+ * A bare boolean sent everyone to the same dead end ("this browser can't create
+ * a passkey") when the browser was usually fine and the *address* was the
+ * problem. Each reason below has a different, one-step remedy, so they are
+ * reported separately.
+ */
+export type PasskeySupport =
+  | 'ok'
+  | 'insecure-context'
+  | 'hostname-is-ip'
+  | 'hostname-is-lan-ip'
+  | 'unsupported';
+
+/**
+ * True when the hostname is an IP literal rather than a name. Brackets are
+ * stripped first: browsers report an IPv6 host as `[::1]`, brackets included.
+ * A colon can only be an IPv6 separator here — `location.hostname` never
+ * carries the port.
+ */
+function bareHost(hostname: string): string {
+  return hostname.replace(/^\[|\]$/g, '');
+}
+
+function isIpLiteral(hostname: string): boolean {
+  const bare = bareHost(hostname);
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(bare) || bare.includes(':');
+}
+
+/** True for an address that means *this* machine — so typing `localhost` fixes it. */
+function isLoopback(hostname: string): boolean {
+  const bare = bareHost(hostname);
+  return /^127\./.test(bare) || bare === '::1' || bare === '0:0:0:0:0:0:0:1';
+}
+
+/**
+ * Diagnose the passkey path *before* starting a ceremony, so the gate can name
+ * the actual cause instead of calling into a void.
+ *
+ * Order matters. A plain-http LAN address is both insecure and an IP, but only
+ * `insecure-context` has the right remedy (use the share link — the address
+ * can't be renamed into working), so it is checked first. What's left after
+ * that is loopback-by-IP: a secure context, so the ceremony starts, and then
+ * dies on the RP ID because WebAuthn forbids an IP there. That one is fixed by
+ * typing `localhost`.
+ *
+ * The RP ID itself is deliberately not consulted: the client cannot know the
+ * server's `TRUG_RP_ID` before it asks for ceremony options, so this checks
+ * only what the page can see about itself.
+ */
+export function passkeySupport(): PasskeySupport {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return 'unsupported';
+  // Secure context first, and it has to be: `PublicKeyCredential` is exposed
+  // only in a secure context, so an insecure page ALSO has no WebAuthn. Testing
+  // capability first would label every home-network address "unsupported" and
+  // lose the one message that tells people what to do about it.
+  if (window.isSecureContext === false) return 'insecure-context';
+  // Secure and still no WebAuthn: now it genuinely is the browser. Checked
+  // before the address, because no address change fixes a missing API — telling
+  // such a browser to "open localhost instead" spends its only message on
+  // advice that cannot work.
+  if (typeof window.PublicKeyCredential !== 'function' || !navigator.credentials) {
+    return 'unsupported';
+  }
+  const hostname = window.location?.hostname ?? '';
+  if (hostname && isIpLiteral(hostname)) {
+    // Loopback is a typo with a one-word fix. Any other IP is a secure context
+    // reached over https on the network — a reverse proxy on a LAN address —
+    // where "open localhost" would point the phone at itself.
+    return isLoopback(hostname) ? 'hostname-is-ip' : 'hostname-is-lan-ip';
+  }
+  return 'ok';
+}
+
+/** True when this browser can create/use passkeys at this address. */
 export function isPasskeySupported(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    typeof window.PublicKeyCredential === 'function' &&
-    typeof navigator !== 'undefined' &&
-    !!navigator.credentials
-  );
+  return passkeySupport() === 'ok';
 }
 
 /** True when the user dismissed/aborted the native passkey prompt. */

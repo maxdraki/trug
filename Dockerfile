@@ -51,6 +51,22 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 ENV TRUG_DB_PATH=/data/trug.db \
     TRUG_STATIC_DIR=/app/static
 
+# Provenance. Without these the only labels on the image are the ones inherited
+# from the uv base, which say astral-sh/uv — so there is no way to tell which
+# commit an image was built from, and "is this container running the code I
+# think it is?" becomes an archaeology exercise against the filesystem.
+#
+# Placed this late on purpose: the ARGs change on every build, and everything
+# after them is cache-busted.
+ARG GIT_REVISION=unknown
+ARG GIT_VERSION=unknown
+LABEL org.opencontainers.image.title="Trug" \
+      org.opencontainers.image.description="A shared shopping list for one household, self-hosted." \
+      org.opencontainers.image.source="https://github.com/maxdraki/trug" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="${GIT_REVISION}" \
+      org.opencontainers.image.version="${GIT_VERSION}"
+
 # Documentation only, and the port used whenever PORT is unset — Compose, a Pi,
 # and `docker run` all land here.
 EXPOSE 8000

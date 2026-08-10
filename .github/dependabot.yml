@@ -1,0 +1,44 @@
+version: 2
+
+# Dependency update PRs (not auto-merged). CI must pass before merge, and
+# major bumps are reviewed by hand. See the note on the design packages below.
+updates:
+  # --- Python server (uv / pyproject.toml + uv.lock) ---------------------
+  # Dependabot reads uv projects via the pip ecosystem. If uv detection ever
+  # misbehaves, Renovate handles uv.lock cleanly as a drop-in replacement.
+  - package-ecosystem: "pip"
+    directory: "/server"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # --- Web toolchain (Vite / Svelte / vitest) ---------------------------
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # @tabler/icons and @catppuccin/palette are design/vocabulary sources
+      # compiled into COMMITTED generated artifacts (src/lib/icons.ts,
+      # src/theme.css). Bumping the package alone changes nothing visible and
+      # CI would not catch a renamed slug, so these are bumped DELIBERATELY:
+      # bump, run `npm run gen-icons` / `gen-theme`, commit the regenerated
+      # output. Kept out of Dependabot to avoid no-op noise.
+      - dependency-name: "@tabler/icons"
+      - dependency-name: "@catppuccin/palette"
+
+  # --- GitHub Actions used by the workflows -----------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]

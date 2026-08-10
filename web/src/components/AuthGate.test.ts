@@ -61,6 +61,7 @@ const performRegistration = vi.fn();
 const performAuthentication = vi.fn();
 vi.mock('../lib/passkey', () => ({
   isPasskeySupported: () => true,
+  passkeySupport: () => 'ok',
   isCancellation: (e: unknown) => e instanceof DOMException && e.name === 'NotAllowedError',
   performRegistration: (...a: unknown[]) => performRegistration(...a),
   performAuthentication: (...a: unknown[]) => performAuthentication(...a),
@@ -246,14 +247,15 @@ describe('AuthGate', () => {
     bootstrapState.mockResolvedValue({ claimable: true });
     render(AuthGate, { children: noopChildren, initialSupported: false });
 
-    // Unclaimed instance, so the gate leads with the bootstrap-token field —
-    // but a valid machine token pasted into it must still just sign in.
-    const input = await screen.findByLabelText('Bootstrap token');
+    // Unclaimed instance — but this browser can't create a passkey, so the claim
+    // is impossible here and the field stays labelled as the ordinary access
+    // token it can still accept. A valid machine token must simply sign in.
+    const input = await screen.findByLabelText('Access token');
     await fireEvent.input(input, { target: { value: 'machine-tok' } });
     await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
 
     await waitFor(() => expect(setToken).toHaveBeenCalledWith('machine-tok'));
-    await waitFor(() => expect(screen.queryByLabelText('Bootstrap token')).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText('Access token')).toBeNull());
     // Never diverted to the first-account claim panel. The gate probes
     // claimability once at boot; the point is that submitToken did NOT probe
     // again — a valid token short-circuits before the claim divert.
@@ -724,5 +726,184 @@ describe('AuthGate — inconclusive probe never accuses the token', () => {
     expect(alert.textContent).not.toMatch(/wasn't accepted/i);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  describe('honest error attribution', () => {
+    // navigator.onLine gets stuck false on captive portals and missed events —
+    // this file says so itself — so it must not be allowed to relabel errors
+    // the server demonstrably answered.
+    let restoreOnLine: (() => void) | null = null;
+    afterEach(() => {
+      restoreOnLine?.();
+      restoreOnLine = null;
+    });
+    const goOffline = () => {
+      const desc = Object.getOwnPropertyDescriptor(navigator, 'onLine');
+      Object.defineProperty(navigator, 'onLine', { value: false, configurable: true });
+      restoreOnLine = () => {
+        if (desc) Object.defineProperty(navigator, 'onLine', desc);
+        else delete (navigator as unknown as Record<string, unknown>).onLine;
+      };
+    };
+
+    it('a server rejection is not reported as "you are offline"', async () => {
+      // The real shape: online when the request goes out, and onLine reads false
+      // by the time the answer comes back — a captive portal, or a missed event
+      // that leaves the flag stuck. The server demonstrably replied.
+      probeToken.mockResolvedValue('lost');
+      bootstrapState.mockResolvedValue({ claimable: true });
+      bootstrapClaimOptions.mockImplementation(async () => {
+        goOffline();
+        throw new ApiError(500, 'Something exploded server-side');
+      });
+      render(AuthGate, { children: noopChildren, initialSupported: true });
+
+      const input = await screen.findByLabelText('Bootstrap token');
+      await fireEvent.input(input, { target: { value: 'wrong-token' } });
+      await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+      const name = await screen.findByLabelText('Your name');
+      await fireEvent.input(name, { target: { value: 'alice' } });
+      await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).not.toMatch(/you're offline/i);
+
+    });
+
+    it('names the config when the passkey fails to verify, instead of echoing the server', async () => {
+      // The single most likely first-deploy failure: TRUG_ORIGIN/TRUG_RP_ID
+      // disagree with the address the browser is on. The raw detail says
+      // nothing a deployer can act on.
+      probeToken.mockResolvedValue('lost');
+      bootstrapState.mockResolvedValue({ claimable: true });
+      bootstrapClaimOptions.mockResolvedValue({ challenge: 'c' });
+      performRegistration.mockResolvedValue({ id: 'cred' });
+      bootstrapClaimVerify.mockRejectedValue(new ApiError(400, 'Passkey verification failed'));
+      render(AuthGate, { children: noopChildren, initialSupported: true });
+
+      const input = await screen.findByLabelText('Bootstrap token');
+      await fireEvent.input(input, { target: { value: 'boot' } });
+      await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+      const name = await screen.findByLabelText('Your name');
+      await fireEvent.input(name, { target: { value: 'alice' } });
+      await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toMatch(/trug status/i);
+      expect(alert.textContent).toMatch(/address/i);
+    });
+  });
+
+  // The pre-flight: name the reason a passkey can't be created here, and stop
+  // starting a ceremony that cannot finish.
+  describe('passkey pre-flight', () => {
+    it('insecure context: blames the address, not the browser, and points at trug share', async () => {
+      render(AuthGate, { children: noopChildren, initialBlocker: 'insecure-context' });
+      await screen.findByLabelText('Access token');
+      const body = document.body.textContent ?? '';
+      expect(body).toMatch(/trug share/i);
+      // The old copy blamed the device; on a LAN address the device is fine.
+      expect(body).not.toMatch(/this browser (can't|doesn't)/i);
+      // The "Not Secure" chip is expected here and shouldn't read as danger.
+      expect(body).toMatch(/not secure/i);
+      // The token path is still the way in, so the field is up front.
+      expect(await screen.findByLabelText('Access token')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: /^sign in$/i })).toBeNull();
+    });
+
+    it('loopback by IP: the remedy is to open localhost instead', async () => {
+      render(AuthGate, { children: noopChildren, initialBlocker: 'hostname-is-ip' });
+      await screen.findByLabelText('Access token');
+      const body = document.body.textContent ?? '';
+      expect(body).toMatch(/localhost/i);
+      expect(body).not.toMatch(/trug share/i);
+    });
+
+    it('a LAN IP over https is not told to open localhost, which would be the phone', async () => {
+      render(AuthGate, { children: noopChildren, initialBlocker: 'hostname-is-lan-ip' });
+      await screen.findByLabelText('Access token');
+      const body = document.body.textContent ?? '';
+      expect(body).toMatch(/needs a name/i);
+      expect(body).not.toMatch(/open localhost/i);
+    });
+
+    it('unsupported browser: keeps the existing browser-blaming copy', async () => {
+      render(AuthGate, { children: noopChildren, initialBlocker: 'unsupported' });
+      await screen.findByLabelText('Access token');
+      expect(document.body.textContent ?? '').toMatch(/doesn't support passkeys/i);
+    });
+
+    it('unclaimed instance: the address problem outranks "paste your bootstrap token"', async () => {
+      // The trial's steady state — nobody spends the bootstrap token for weeks —
+      // so this collision is the normal case, not an edge one.
+      bootstrapState.mockResolvedValue({ claimable: true });
+      render(AuthGate, { children: noopChildren, initialBlocker: 'insecure-context' });
+      await waitFor(() => expect(bootstrapState).toHaveBeenCalled());
+      const body = document.body.textContent ?? '';
+      expect(body).toMatch(/trug share/i);
+      expect(body).not.toMatch(/create the first account/i);
+    });
+
+    it('never starts a claim ceremony it cannot finish', async () => {
+      // Pasting the bootstrap token on a blocked address used to enter the claim
+      // panel and call performRegistration() into a void.
+      probeToken.mockResolvedValue('lost');
+      bootstrapState.mockResolvedValue({ claimable: true });
+      render(AuthGate, { children: noopChildren, initialBlocker: 'insecure-context' });
+      await waitFor(() => expect(bootstrapState).toHaveBeenCalled());
+
+      const input = await screen.findByLabelText('Access token');
+      await fireEvent.input(input, { target: { value: 'boot-secret' } });
+      await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent).toMatch(/passkey|address|share/i);
+      expect(screen.queryByLabelText('Your name')).toBeNull();
+      expect(performRegistration).not.toHaveBeenCalled();
+    });
+
+    it('keeps the invite in the URL on a blocked address, so it can be forwarded', async () => {
+      // The remedy for a blocked address is "open this somewhere else". Stripping
+      // #invite would destroy the very thing that has to be carried there.
+      const replaceState = vi.spyOn(history, 'replaceState');
+      render(AuthGate, {
+        children: noopChildren,
+        initialInvite: 'inv-123',
+        initialBlocker: 'insecure-context',
+      });
+      await screen.findByLabelText('Access token');
+      expect(replaceState).not.toHaveBeenCalled();
+      replaceState.mockRestore();
+    });
+
+    it('still scrubs the invite when the browser itself is the problem', async () => {
+      const replaceState = vi.spyOn(history, 'replaceState');
+      render(AuthGate, {
+        children: noopChildren,
+        initialInvite: 'inv-123',
+        initialBlocker: 'unsupported',
+      });
+      await screen.findByLabelText('Access token');
+      expect(replaceState).toHaveBeenCalled();
+      replaceState.mockRestore();
+    });
+
+    it('unsupported browser keeps a real next step, not just "paste a token"', async () => {
+      render(AuthGate, { children: noopChildren, initialBlocker: 'unsupported' });
+      await screen.findByLabelText('Access token');
+      expect(document.body.textContent ?? '').toMatch(/Face ID|Touch ID|security key/i);
+    });
+
+    it('still signs in a valid machine token on a blocked address', async () => {
+      // The whole point of the trial path: the list works here.
+      probeToken.mockResolvedValue('ok');
+      bootstrapState.mockResolvedValue({ claimable: true });
+      render(AuthGate, { children: noopChildren, initialBlocker: 'insecure-context' });
+
+      const input = await screen.findByLabelText('Access token');
+      await fireEvent.input(input, { target: { value: 'mcp-tok' } });
+      await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+      await waitFor(() => expect(setToken).toHaveBeenCalledWith('mcp-tok'));
+    });
   });
 });

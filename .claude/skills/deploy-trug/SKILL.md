@@ -54,11 +54,14 @@ first person via the bootstrap token, everyone else by invite.)
 ### A1. First boot
 
 ```sh
+docker compose pull      # else `up` builds from source — minutes on a Pi
 docker compose up -d
 docker compose logs -f
 ```
 
-The image builds the PWA + server into one container on port `8000`. The
+The image serves the PWA + server from one container on port `8000`. Prose walkthrough of this
+same path, plus the Raspberry Pi specifics (64-bit OS, the `docker` group, SD cards):
+[`docs/install.md`](../../../docs/install.md). The
 entrypoint `chown`s the `./data` volume itself and drops to a non-root user via
 gosu — **there is no manual `chown` step**; if the user brings one up, tell them
 it isn't needed.
@@ -188,6 +191,18 @@ so claim the owner account over the HTTPS domain (or `localhost` for a local try
 then invite everyone else from inside the app (Phase D). The token fallback signs in as a
 machine principal only — it can't claim a human owner account — so it is not a way around this.
 
+**Deploying to a headless box (a Pi, a NAS, a VPS)?** Don't send the user hunting for HTTPS
+before they can claim. Forward the port over the SSH session they already have:
+
+```sh
+ssh -L 8000:localhost:8000 user@the-box
+```
+
+With that open, `http://localhost:8000` in a browser **on their own machine** is a secure
+context and matches the default `TRUG_ORIGIN`/`TRUG_RP_ID`, so the passkey enrols normally.
+Give the box a real HTTPS name afterwards (`docs/remote-access.md`) and have them re-enrol
+once — changing `TRUG_RP_ID` invalidates credentials bound to the old hostname.
+
 1. Open the instance (`http://localhost:8000` or the public domain).
 2. On the sign-in gate, choose **"use an access token"** and paste the
    **`TRUG_BOOTSTRAP_TOKEN`**. Use the current value: if you restarted without
@@ -283,17 +298,18 @@ it, and the in-app one wins:
 
 ## Troubleshooting
 
+The symptom/cause/fix tables live in **[`docs/troubleshooting.md`](../../../docs/troubleshooting.md)**
+— read that file when something fails rather than guessing, and keep it as the single copy so this
+skill and the docs can't drift apart.
+
+The four that come up most during a deploy:
+
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Passkeys fail on a LAN address (`http://<ip>` / `.local`) | HTTPS (or literal `localhost`) is a prerequisite for creating accounts — a browser won't make a passkey in an insecure context and rp_id can't be an IP | Give the box a trusted HTTPS name: `tailscale serve --bg 8000` (one command → `https://<name>.ts.net`) or the compose file's `cloudflared` block, then set `TRUG_RP_ID`/`TRUG_ORIGIN` to that name. The token fallback is **machine / emergency access only** — it signs in as a machine principal and cannot claim a human owner account, so it's not a way to skip HTTPS. |
+| Passkeys fail on a LAN address (`http://<ip>` / `.local`) | HTTPS (or literal `localhost`) is a prerequisite for creating accounts — a browser won't make a passkey in an insecure context and rp_id can't be an IP | Give the box a trusted HTTPS name (`docs/remote-access.md`), or on a headless box claim the first account through an SSH tunnel: `ssh -L 8000:localhost:8000 user@host`, then open `http://localhost:8000` locally. The token fallback signs in as a machine principal and **cannot** claim a human owner account, so it is not a way to skip HTTPS. |
 | Passkey create/sign-in always fails | `TRUG_RP_ID` / `TRUG_ORIGIN` don't match the URL in the browser | Set `TRUG_RP_ID` to the bare host and `TRUG_ORIGIN` to the exact origin (scheme + host, and port if non-standard); restart. On Railway they must equal the generated domain. |
-| Container can't write the DB / permission errors on `/data` | Rare — the entrypoint chowns the volume on boot | Confirm the container runs the bundled `docker-entrypoint.sh` (don't override the entrypoint) and that `./data` isn't mounted read-only. No manual `chown` should be needed. |
 | Ring / MCP client stopped working after a restart | Generated tokens rotate on restart until pinned | Pin `TRUG_TOKEN_RING` / `TRUG_TOKEN_MCP` in `.env` (or Railway vars) to the values from the first-boot banner. |
-| Invite link 400 "invalid or expired" | Single-use, 24h TTL; already used or old | Mint a fresh one (Settings → Members → "+ invite someone"). |
 | Bootstrap token gets 403 / can't create the first account | The instance is already claimed (any user exists) — bootstrap is one-time, first-user-only | Sign in with your passkey, or have an enrolled member send you an invite link. Full lockout (all devices lost): `docker compose exec trug trug-doctor recover --reset-bootstrap` re-opens the claim non-destructively (no DB surgery). |
-| Old UI after deploying an update / stale assets | PWA service-worker cache | Hard-reload, or remove the installed PWA and reinstall; on mobile, close all tabs first. |
-| `/mcp` returns 401 in a connector | Expected before OAuth — it advertises the auth flow | Complete the connector sign-in (passkey + consent), or for token clients send `Authorization: Bearer <MCP token>`. |
-| No token banner in logs | Every token is already pinned (env/`.env`), so nothing is generated to print | Read them from your `.env` / Railway vars. Settings → Connections also shows the machine tokens, but only once you're on a passkey session (it 401s on a bootstrap/bearer token). |
 
 ## Done
 

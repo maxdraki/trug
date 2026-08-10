@@ -1,0 +1,383 @@
+#!/usr/bin/env bash
+#
+# trug — the six things you actually do to a running trug.
+#
+#   up · down · status · logs · share · set-origin
+#
+# Deliberately small. Everything else (backups, updates, recovery) is either a
+# plain docker command or lives in `trug-doctor` inside the container, and a verb
+# that only wraps one line of docker earns its place by being needed often.
+#
+# bash 3.2-safe: macOS still ships 3.2.57, so no associative arrays, no ${x,,},
+# no `mapfile`.
+
+set -euo pipefail
+
+TRUG_HOME="${TRUG_HOME:-$HOME/.trug}"
+COMPOSE=(docker compose --project-directory "$TRUG_HOME")
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+  GREEN=$'\033[32m'; RED=$'\033[31m'; YELLOW=$'\033[33m'; TEAL=$'\033[36m'
+else
+  BOLD=''; DIM=''; RESET=''; GREEN=''; RED=''; YELLOW=''; TEAL=''
+fi
+
+die() {
+  printf '  %s✗%s %s\n' "$RED" "$RESET" "$1" >&2
+  shift
+  for line in "$@"; do printf '    %s%s%s\n' "$DIM" "$line" "$RESET" >&2; done
+  exit 1
+}
+
+usage() {
+  cat <<EOF
+${BOLD}trug${RESET} — a shared shopping list on your own machine
+
+  ${BOLD}trug up${RESET}                     start it
+  ${BOLD}trug down${RESET}                   stop it
+  ${BOLD}trug status${RESET}                 is it healthy, and is anything misconfigured
+  ${BOLD}trug logs${RESET} [-f]              what the server is saying
+  ${BOLD}trug share${RESET}                  a link and a QR for everyone else on the network
+  ${BOLD}trug set-origin${RESET} <https-url> point trug at its new name, and check it took
+
+Installed at ${DIM}${TRUG_HOME}${RESET}
+EOF
+}
+
+require_install() {
+  [ -f "$TRUG_HOME/.env" ] && [ -f "$TRUG_HOME/docker-compose.yml" ] || die \
+    "No trug install found at $TRUG_HOME." \
+    "Install one with:" \
+    "  curl -fsSL https://raw.githubusercontent.com/maxdraki/trug/main/install.sh | sh"
+}
+
+# Mirrors install.sh's env_value. Kept separate on purpose: install.sh is piped
+# from curl and cannot source this file, so the pair is maintained by hand.
+#
+# `q` inside the address block rather than `| head -n 1`: under `set -o pipefail`
+# head closing the pipe early makes sed die of SIGPIPE and the whole command exit
+# 141. The obvious spelling — `s/^KEY=//p;/^KEY=/q` — silently returns EVERY
+# match, because the substitution has already removed the prefix the address is
+# looking for. With a duplicated key that put a newline in the middle of the
+# share URL and the QR built from it.
+env_value() { sed -n "/^$1=/{s///p;q;}" "$TRUG_HOME/.env"; }
+
+# Rewrite one KEY=value in .env, preserving everything around it. Appends when
+# the key isn't there yet, so a hand-trimmed .env still works.
+#
+# Written to a temp file in $TRUG_HOME and moved into place, because .env holds
+# four secrets and one of them (TRUG_SECRET) is unrecoverable. The obvious
+# `cat "$tmp" > .env` truncates the real file first and streams second, so a
+# full disk — the canonical Pi failure — leaves it half-written with the tokens
+# gone and only "write error" on screen to explain it. Same filesystem so the
+# mv is atomic; /tmp would be a different device and silently degrade to a copy.
+# Set one or more KEY=value pairs in .env in a single atomic replacement.
+#
+# All of them together, not one call each: TRUG_ORIGIN and TRUG_RP_ID have to
+# move as a pair, and two separate writes can leave the new origin beside the
+# old RP ID if the second fails — a mismatch that breaks every passkey ceremony
+# with no error anywhere, which is the exact state set-origin exists to prevent.
+set_env_values() {
+  local tmp src
+  tmp="$(mktemp "$TRUG_HOME/.env.XXXXXX")"
+  src="$TRUG_HOME/.env"
+  cp "$src" "$tmp.work"
+  while [ "$#" -gt 0 ]; do
+    local key="$1" value="$2"; shift 2
+    if grep -q "^${key}=" "$tmp.work"; then
+      # awk rather than sed -i: sed's in-place flag differs between BSD and GNU,
+      # and the value can contain characters sed would treat as delimiters.
+      awk -v k="$key" -v v="$value" \
+        'index($0, k "=") == 1 { print k "=" v; next } { print }' \
+        "$tmp.work" >"$tmp.next" && mv "$tmp.next" "$tmp.work"
+    else
+      printf '%s=%s\n' "$key" "$value" >>"$tmp.work"
+    fi
+    # -Fqx so the value is compared literally: as a regex, `a.b` would also be
+    # satisfied by a stale `axb` and a failed substitution would verify clean.
+    if [ ! -s "$tmp.work" ] || ! grep -Fqx "${key}=${value}" "$tmp.work"; then
+      rm -f "$tmp" "$tmp.work" "$tmp.next"
+      die "Couldn't update $key in $src — nothing was changed." \
+        "Check there is free space on the disk, then try again."
+    fi
+  done
+  chmod 600 "$tmp.work"
+  mv "$tmp.work" "$src"
+  rm -f "$tmp"
+}
+
+# The address other devices on the network should use.
+#
+# Handing out the wrong one is the worst failure this command has: a QR that
+# scans, a link that looks right, and a phone that times out while every line on
+# screen says it should have worked. Two ways to get it wrong, so both are
+# guarded — a Docker bridge (172.17.0.1 is on every machine this runs on), and a
+# VPN address, which answers from the box and from nowhere else.
+#
+# So: an actual private-range address on a real interface first, and only then
+# the routing table. The default route's source is the VPN's address whenever
+# one carries the default route — a Tailscale exit node, or any full-tunnel
+# WireGuard — and Tailscale is the first thing the docs tell people to install.
+lan_ip() {
+  local ip=''
+  if command -v ipconfig >/dev/null 2>&1; then
+    ip="$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)"
+  fi
+  if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 -o addr show scope global 2>/dev/null \
+      | awk '$2 !~ /^(docker|br-|veth|virbr|tailscale|wg|tun|zt|lo)/ { print $4 }' \
+      | cut -d/ -f1 \
+      | grep -E '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)' \
+      | head -n 1 || true)"
+  fi
+  if [ -z "$ip" ] && command -v ip >/dev/null 2>&1; then
+    ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}' || true)"
+  fi
+  if [ -z "$ip" ] && command -v hostname >/dev/null 2>&1; then
+    ip="$(hostname -I 2>/dev/null | tr ' ' '\n' \
+      | grep -vE '^(127\.|169\.254\.|172\.1[7-9]\.|172\.2[0-9]\.|172\.3[01]\.)' \
+      | head -n 1 || true)"
+  fi
+  printf '%s' "$ip"
+}
+
+# Correct a dangerous assumption when ufw is running.
+#
+# ufw does NOT filter this port, and the first version of this function said the
+# opposite — it told people to run `ufw allow`, which is a no-op here. Docker
+# publishes a container port by DNAT in PREROUTING and then FORWARD; ufw's rules
+# live in INPUT, which that traffic never touches. It's a documented Docker
+# design decision, not a bug, and it cuts the way that matters: someone running
+# ufw with a default-deny policy will reasonably believe this link is not
+# reachable from the network. It is.
+#
+# So this is a warning about exposure, not a connectivity fix — it sharpens the
+# "anyone on this network" line above rather than repeating it.
+#
+# ufw only. firewalld's Docker integration differs by version and I have no way
+# to test it here; a guess would be exactly the mistake this replaces. The docs
+# carry that case.
+firewall_hint() {
+  [ "$(uname -s 2>/dev/null)" = "Linux" ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl is-active --quiet ufw 2>/dev/null || return 0
+  printf '  %sufw is running, but it is not protecting this port.%s\n' "$YELLOW" "$RESET"
+  printf '  %sDocker forwards published ports past ufw entirely, so the link above is%s\n' "$DIM" "$RESET"
+  printf '  %sreachable by anything that can route here whatever your ufw rules say.%s\n' "$DIM" "$RESET"
+  printf '  %sTo actually restrict it, write the rule in the DOCKER-USER chain.%s\n\n' "$DIM" "$RESET"
+}
+
+# Refuse to speak for a container that isn't there.
+#
+# `docker compose exec` exits 1 when the service isn't running — the same code
+# the doctor uses for "warnings". Without this check, a crash-looping container
+# is reported as "the doctor is not happy with the result", sending someone to
+# re-read doctor output that was never printed, while the real problem is one
+# `trug logs` away and never mentioned.
+# Also distinguishes "I couldn't ask" from "the answer was no". Swallowing the
+# query's own failure made a stopped Docker daemon, a Compose too old for
+# --status, and a genuinely dead container all say "trug isn't running — run
+# trug up", which is the right advice for exactly one of them.
+require_running() {
+  local out rc err
+  err="$(mktemp)"
+  set +e
+  out="$("${COMPOSE[@]}" ps --status running -q trug 2>"$err")"
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    local detail
+    detail="$(head -n 3 "$err")"
+    rm -f "$err"
+    die "Couldn't ask Docker about trug." \
+      "${detail:-docker compose ps failed with no output}" \
+      "If Docker itself isn't running, start it and try again."
+  fi
+  rm -f "$err"
+  [ -n "$out" ] || die "trug isn't running." \
+    "  trug up     to start it" \
+    "  trug logs   to see why it stopped"
+}
+
+# --- verbs -------------------------------------------------------------------
+
+cmd_up()   { require_install; "${COMPOSE[@]}" up -d; }
+cmd_down() { require_install; "${COMPOSE[@]}" down; }
+cmd_logs() { require_install; "${COMPOSE[@]}" logs "$@"; }
+
+cmd_status() {
+  require_install
+  "${COMPOSE[@]}" ps
+  printf '\n'
+  require_running
+  # The doctor's exit code is the useful part (0 healthy / 1 warnings / 2 broken)
+  # so it passes straight through rather than being flattened to "ran ok". The
+  # check above is what keeps that contract honest: without it, "container down"
+  # arrives here as exit 1 and masquerades as "warnings".
+  set +e
+  "${COMPOSE[@]}" exec -T trug trug-doctor
+  local rc=$?
+  set -e
+  return "$rc"
+}
+
+cmd_share() {
+  require_install
+  # Checked before anything is printed. Handing out a link and a QR for a
+  # container that isn't listening is the one failure this command must never
+  # produce: the phone times out, and every line on screen says it should have
+  # worked.
+  require_running
+  local port token ip url cols
+  port="$(env_value PORT)"; port="${port:-8000}"
+  token="$(env_value TRUG_TOKEN_MCP)"
+  [ -n "$token" ] || die "No TRUG_TOKEN_MCP in $TRUG_HOME/.env." \
+    "Re-run the installer to regenerate it: it is the key this link carries."
+
+  ip="$(lan_ip)"
+  if [ -z "$ip" ]; then
+    die "Couldn't work out this machine's address on the network." \
+      "Find it yourself (Settings → Network, or \`ifconfig\`) and hand out:" \
+      "  http://YOUR-ADDRESS:$port/?token=$token"
+  fi
+  url="http://${ip}:${port}/?token=${token}"
+
+  printf '\n  %sOpen this on any device on the same network:%s\n\n' "$BOLD" "$RESET"
+  printf '    %s%s%s\n\n' "$TEAL" "$url" "$RESET"
+
+  # The QR renders inside the container (segno lives in the image, so the host
+  # needs no Python). Its stderr is captured rather than passed through: the two
+  # things that go wrong here are "won't fit this terminal" and "this image
+  # predates the QR renderer" — the second happens to anyone who updates the CLI
+  # without pulling — and neither deserves a Python traceback in the middle of a
+  # link that works perfectly well on its own.
+  cols="${COLUMNS:-}"
+  if [ -z "$cols" ] && command -v tput >/dev/null 2>&1; then
+    cols="$(tput cols 2>/dev/null || true)"
+  fi
+  cols="${cols:-80}"
+  local qr qr_err rc
+  qr_err="$(mktemp)"
+  set +e
+  qr="$("${COMPOSE[@]}" exec -T trug python -m trug.share "$url" --cols "$cols" 2>"$qr_err")"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    printf '%s\n' "$qr"
+  else
+    # Say that a QR was attempted and didn't happen. Silence here means someone
+    # running an image older than the QR renderer sees no code, no explanation,
+    # and no reason to think one was ever coming.
+    # shellcheck disable=SC2016  # backticks are prose here, not a substitution
+    printf '  %s(no QR: widen the terminal, or `docker compose pull` if this image\n' "$DIM"
+    printf '   predates it — the link above works either way)%s\n' "$RESET"
+    [ -n "${TRUG_DEBUG:-}" ] && sed 's/^/    /' "$qr_err" >&2
+  fi
+  rm -f "$qr_err"
+
+  printf '\n  %sAnyone on this network who has the link can use the list.%s\n' "$YELLOW" "$RESET"
+  printf '  %sIt is a shared key, not a personal login — no accounts, and items are%s\n' "$DIM" "$RESET"
+  printf '  %sadded as "mcp" rather than by name. On a laptop, "this network" means%s\n' "$DIM" "$RESET"
+  printf '  %swhatever wifi you are on, so think twice in a cafe or a hotel.%s\n\n' "$DIM" "$RESET"
+
+  firewall_hint
+  printf '  %sWhen you want real accounts on every phone:%s\n' "$DIM" "$RESET"
+  printf '  %s  tailscale serve --bg %s  &&  trug set-origin https://<the-name-it-prints>%s\n\n' "$DIM" "$port" "$RESET"
+}
+
+cmd_set_origin() {
+  require_install
+  local url="${1:-}"
+  [ -n "$url" ] || die "set-origin needs the URL people will load." \
+    "  trug set-origin https://trug.tail1234.ts.net"
+
+  # Validate hard rather than normalising quietly. Every mistake here breaks
+  # every passkey ceremony with no error in the logs, the UI or the healthcheck,
+  # so guessing what someone meant is worse than refusing.
+  case "$url" in
+    https://*) ;;
+    http://localhost|http://localhost:*) ;;
+    http://*) die "That origin is plain http, so browsers won't create passkeys against it." \
+        "Use https, or leave the origin as localhost until you have a name." ;;
+    *) die "That doesn't look like a URL: $url" \
+        "It needs the scheme, exactly as it appears in the address bar:" \
+        "  trug set-origin https://trug.tail1234.ts.net" ;;
+  esac
+
+  local rest host
+  rest="${url#*://}"
+  case "$rest" in
+    */*) die "Give just the origin — scheme, host and port, no path." \
+        "  trug set-origin https://${rest%%/*}" ;;
+    *@*) die "Take the credentials out of the URL — trug needs just the origin." \
+        "  trug set-origin https://${rest#*@}" ;;
+  esac
+
+  local no_ip="WebAuthn won't accept an IP address as a passkey's RP ID."
+  local no_ip_why="There is no setting that changes that — the box needs a name."
+  local no_ip_how="The quickest one is Tailscale:  tailscale serve --bg 8000"
+  local no_ip_alt="Or keep sharing without accounts:  trug share"
+
+  # An IPv6 literal is bracketed, so the naive `${rest%%:*}` would yield "[" —
+  # which passes a "does it contain non-digits" IP test and gets written as the
+  # RP ID, breaking every ceremony while the doctor only warns about it.
+  case "$rest" in
+    \[*) die "$no_ip" "$no_ip_why" "$no_ip_how" "$no_ip_alt" ;;
+  esac
+  host="${rest%%:*}"
+
+  case "$host" in
+    *[!0-9.]*) ;;
+    *) die "$no_ip" "$no_ip_why" "$no_ip_how" "$no_ip_alt" ;;
+  esac
+
+  # A dotless host is not a registrable domain, and browsers reject it as an RP
+  # ID. localhost is the one legitimate exception — the same rule trug-doctor's
+  # rp_id.registrable check applies, enforced here before it can be written.
+  case "$host" in
+    localhost) ;;
+    *.*) ;;
+    *) die "\"$host\" has no dot in it, so browsers won't accept it as a passkey's RP ID." \
+        "Use the full name people type into the address bar." ;;
+  esac
+
+  printf '  Setting origin to %s%s%s (RP ID %s%s%s)\n' "$TEAL" "$url" "$RESET" "$TEAL" "$host" "$RESET"
+  set_env_values TRUG_ORIGIN "$url" TRUG_RP_ID "$host"
+
+  printf '  %sAnyone already enrolled will need to create their passkey again:%s\n' "$YELLOW" "$RESET"
+  printf '  %spasskeys are bound to the hostname they were made under.%s\n\n' "$DIM" "$RESET"
+
+  "${COMPOSE[@]}" up -d
+
+  printf '\n'
+  # If the restart didn't take, say that rather than blaming the doctor for an
+  # opinion it never got to give.
+  require_running
+  set +e
+  "${COMPOSE[@]}" exec -T trug trug-doctor
+  local rc=$?
+  set -e
+  if [ "$rc" -eq 0 ]; then
+    printf '\n  %s✓%s Origin set and checked. Open %s%s%s and create your passkey.\n\n' \
+      "$GREEN" "$RESET" "$TEAL" "$url" "$RESET"
+  else
+    printf '\n  %s✗%s The doctor is not happy with the result — see above.\n' "$RED" "$RESET"
+    printf '    %sNothing was rolled back; fix what it names and run set-origin again.%s\n\n' "$DIM" "$RESET"
+  fi
+  return "$rc"
+}
+
+# --- dispatch ----------------------------------------------------------------
+
+case "${1:-}" in
+  up)          shift; cmd_up "$@" ;;
+  down)        shift; cmd_down "$@" ;;
+  status)      shift; cmd_status "$@" ;;
+  logs)        shift; cmd_logs "$@" ;;
+  share)       shift; cmd_share "$@" ;;
+  set-origin)  shift; cmd_set_origin "$@" ;;
+  -h|--help|help) usage ;;
+  '')          usage; exit 2 ;;
+  *)           printf '  %s✗%s Unknown command: %s\n\n' "$RED" "$RESET" "$1" >&2; usage >&2; exit 2 ;;
+esac
