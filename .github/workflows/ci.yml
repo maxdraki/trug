@@ -242,6 +242,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    # The suite takes ~25s locally and stubs everything it talks to, so anything
+    # near this is a hang, not slowness. Without a bound a hung test sits for six
+    # hours and produces no log at all, because logs only become fetchable once
+    # the job ends — which is exactly how the first macOS run went.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
 
@@ -280,7 +285,10 @@ jobs:
           bats --version
 
       - name: Test (bats)
-        run: bats tests/shell/
+        # --timing so a slow test is identifiable, and --print-output-on-failure
+        # so a failure arrives with the command output rather than just a line
+        # number.
+        run: bats --timing --print-output-on-failure tests/shell/
 
   install:
     name: install.sh end-to-end (real docker)
