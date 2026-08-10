@@ -60,6 +60,36 @@ teardown() { teardown_sandbox; }
   grep -q -- "--project-directory $HOME/.trug down" "$DOCKER_LOG"
 }
 
+@test "doctor: passes arguments through to trug-doctor in the container" {
+  # The lockout escape hatch. Before this verb existed the documented recovery
+  # command was `docker compose exec trug trug-doctor recover …`, which only
+  # works from the directory holding the compose file — so the first thing
+  # anyone locked out met was "no configuration file provided: not found".
+  run bash "$TRUG" doctor recover --invite alice
+  [ "$status" -eq 0 ]
+  grep -q -- "trug-doctor recover --invite alice" "$DOCKER_LOG"
+}
+
+@test "doctor: passes the exit code through, like status does" {
+  export DOCKER_STUB_DOCTOR_EXIT=2
+  run bash "$TRUG" doctor
+  [ "$status" -eq 2 ]
+}
+
+@test "doctor: a stopped container is named, not blamed on the doctor" {
+  export DOCKER_STUB_RUNNING=no
+  run bash "$TRUG" doctor recover --invite alice
+  [ "$status" -ne 0 ]
+  assert_contains "isn't running" "$output"
+}
+
+@test "usage: names the recovery path, since that is what a locked-out person needs" {
+  run bash "$TRUG"
+  [ "$status" -ne 0 ]
+  assert_contains "doctor" "$output"
+  assert_contains "recover --invite" "$output"
+}
+
 @test "share: prints the LAN URL carrying the MCP token" {
   run bash "$TRUG" share
   [ "$status" -eq 0 ]

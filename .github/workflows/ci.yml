@@ -243,7 +243,7 @@ jobs:
     # the two tests that pipe the installer into a shell — if the consuming
     # shell exits early, `cat` blocks forever on a full pipe and the test never
     # returns. Not reproducible locally, and not worth blocking a release on, so
-    # it is tracked separately rather than left flaky here.
+    # it is tracked in maxdraki/trug#9 rather than left flaky here.
     #
     # The suite takes ~25s and stubs everything it talks to, so anything near
     # this cap is a hang. Without the bound a hung job sits for six hours and

@@ -655,24 +655,37 @@ if [ -z "$LAN_IP" ] && command -v hostname >/dev/null 2>&1; then
 fi
 
 printf '\n  %s%s✓ trug is up.%s\n\n' "$BOLD" "$GREEN" "$RESET"
-printf '  %shere%s        %shttp://localhost:%s%s\n' "$BOLD" "$RESET" "$TEAL" "$PORT" "$RESET"
+printf '  %sTwo ways in, and they behave differently.%s\n\n' "$BOLD" "$RESET"
+
+printf '  %s1. localhost — with accounts%s\n' "$BOLD" "$RESET"
+printf '     %shttp://localhost:%s%s\n' "$TEAL" "$PORT" "$RESET"
+printf '     %sOnly on this machine. Your browser will ask for a passkey (Touch ID,%s\n' "$DIM" "$RESET"
+printf '     %sWindows Hello, a security key) — that is the point: it is the one%s\n' "$DIM" "$RESET"
+printf '     %saddress where an account can be created at all.%s\n\n' "$DIM" "$RESET"
+
 if [ -n "$LAN_IP" ]; then
-  # shellcheck disable=SC2016  # backticks are prose here, not a substitution
-  printf '  %son the wifi%s %shttp://%s:%s%s  %s(run `trug share` for a link with the key in it)%s\n' \
-    "$BOLD" "$RESET" "$TEAL" "$LAN_IP" "$PORT" "$RESET" "$DIM" "$RESET"
+  printf '  %s2. the network — no accounts, no passkey%s\n' "$BOLD" "$RESET"
+  printf '     %shttp://%s:%s%s\n' "$TEAL" "$LAN_IP" "$PORT" "$RESET"
+  printf '     %sRun %strug share%s%s for that link with the key already in it, plus a QR.%s\n' \
+    "$DIM" "$BOLD" "$RESET" "$DIM" "$RESET"
+  printf '     %sNo sign-in prompt, nothing to install. Everyone who opens it shares%s\n' "$DIM" "$RESET"
+  printf '     %sONE identity — the list is shared, the login is not. Items show up as%s\n' "$DIM" "$RESET"
+  printf '     %s"mcp" rather than by name, and there are no per-person settings.%s\n' "$DIM" "$RESET"
+  printf '     %sBrowsers refuse to make a passkey against an IP, which is why this%s\n' "$DIM" "$RESET"
+  printf '     %sroute skips them rather than choosing not to use them.%s\n\n' "$DIM" "$RESET"
 fi
 
-printf '\n  %sNext%s\n' "$BOLD" "$RESET"
+printf '  %sNext%s\n' "$BOLD" "$RESET"
 if [ "$CLAIMED" = 1 ]; then
   printf '   1. Open %shttp://localhost:%s%s and sign in with your passkey.\n' "$TEAL" "$PORT" "$RESET"
 else
-  printf '   1. Open %shttp://localhost:%s%s and paste this to create your account:\n' "$TEAL" "$PORT" "$RESET"
+  printf '   1. Open %shttp://localhost:%s%s, choose "use an access token", and paste:\n' "$TEAL" "$PORT" "$RESET"
   printf '      %s%s%s\n' "$BOLD" "$BOOT_TOKEN" "$RESET"
+  printf '      %sThen pick a name and create your passkey.%s\n' "$DIM" "$RESET"
   printf '      %sUntil you do, anything that can reach this machine can claim it.%s\n' "$DIM" "$RESET"
 fi
-printf '   2. %strug share%s — a link and a QR for everyone else in the house.\n' "$BOLD" "$RESET"
-printf '      No sign-in, works only on this network, and the list syncs both ways.\n'
+printf '   2. %strug share%s — the link and QR for everyone else in the house.\n' "$BOLD" "$RESET"
 printf '   3. When you want real accounts on every phone, give the box an HTTPS\n'
 printf '      name and tell trug about it: %strug set-origin https://…%s\n' "$BOLD" "$RESET"
-printf '\n  %sup · down · status · logs · share · set-origin%s\n' "$DIM" "$RESET"
+printf '\n  %sup · down · status · logs · share · set-origin · doctor%s\n' "$DIM" "$RESET"
 printf '  %s%s%s\n\n' "$DIM" "$TRUG_HOME" "$RESET"

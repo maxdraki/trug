@@ -101,6 +101,73 @@ describe('createStore', () => {
     expect(store.pendingIds.has(optId)).toBe(false);
   });
 
+  it('re-adding a checked item moves that row — no Other detour, no duplicate', async () => {
+    // Reported as "the whole list jitters". Re-adding something you have already
+    // bought used to fabricate an optimistic row in `Other` under a NEW id while
+    // the struck-through row was still in the basket — so the name was on screen
+    // twice — and then the server's reply (the original row, reactivated, in its
+    // real aisle) destroyed that row and inserted another one somewhere else.
+    // Three overlapping height changes for what is logically one move.
+    const d = deferred<{ item: Item; created: boolean }>();
+    const api = fakeApi({
+      list: vi.fn(() =>
+        Promise.resolve({
+          active: {},
+          checked: [item({ id: 'milk-1', name: 'Milk', category: 'Dairy', status: 'checked' })],
+        }),
+      ),
+      addItem: vi.fn(() => d.promise),
+    });
+    const store = createStore({ api, queue: freshQueue(), walkOrder: ['Other', 'Dairy'] });
+    await store.refresh();
+    expect(store.checked.map((i) => i.id)).toEqual(['milk-1']);
+
+    const p = store.add('Milk');
+
+    // Synchronously, before the server answers: one row, its own id, its real
+    // aisle, and gone from the basket.
+    const rows = flat(store).filter((i) => i.name === 'Milk');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].id).toBe('milk-1');
+    expect(rows[0].category).toBe('Dairy');
+    expect(store.groups.some((g) => g.category === 'Other')).toBe(false);
+    expect(store.checked).toHaveLength(0);
+
+    // The server reactivates the original row and returns it.
+    d.resolve({
+      item: item({ id: 'milk-1', name: 'Milk', category: 'Dairy', status: 'active' }),
+      created: false,
+    });
+    await p;
+
+    // …and reconciliation is a no-op rather than a second move.
+    const after = flat(store).filter((i) => i.name === 'Milk');
+    expect(after).toHaveLength(1);
+    expect(after[0].id).toBe('milk-1');
+    expect(store.groups.some((g) => g.category === 'Other')).toBe(false);
+    expect(store.pendingIds.size).toBe(0);
+  });
+
+  it('re-adding an item already on the list does not duplicate it either', async () => {
+    const d = deferred<{ item: Item; created: boolean }>();
+    const api = fakeApi({
+      list: vi.fn(() =>
+        Promise.resolve({ active: { Dairy: [item({ id: 'milk-1', name: 'Milk', category: 'Dairy' })] }, checked: [] }),
+      ),
+      addItem: vi.fn(() => d.promise),
+    });
+    const store = createStore({ api, queue: freshQueue(), walkOrder: ['Other', 'Dairy'] });
+    await store.refresh();
+
+    const p = store.add('milk');   // different case — same item to the server
+    expect(flat(store).filter((i) => i.name.toLowerCase() === 'milk')).toHaveLength(1);
+    expect(store.groups.some((g) => g.category === 'Other')).toBe(false);
+
+    d.resolve({ item: item({ id: 'milk-1', name: 'Milk', category: 'Dairy' }), created: false });
+    await p;
+    expect(flat(store).filter((i) => i.name.toLowerCase() === 'milk')).toHaveLength(1);
+  });
+
   it('offline add stays pending and survives refresh()', async () => {
     const api = fakeApi({
       addItem: vi.fn(() => Promise.reject(new TypeError('fetch failed'))),

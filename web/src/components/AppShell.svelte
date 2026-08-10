@@ -438,6 +438,13 @@
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     padding: 0 16px;
+    /* Scroll anchoring fights the list's own animations. Checking an item, or
+       re-adding one, changes the height of two containers at once; the browser
+       then adjusts scrollTop to keep an anchor node still, which moves
+       everything ELSE instead. That is the part people describe as the whole
+       list jittering rather than one row moving. The list animates its own
+       reflow, so it does not want the help. */
+    overflow-anchor: none;
   }
   footer {
     flex: 0 0 auto;

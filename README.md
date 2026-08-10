@@ -49,8 +49,9 @@ curl -fsSL https://raw.githubusercontent.com/maxdraki/trug/main/install.sh | sh
 Needs Docker, Compose v2 and `curl` already installed — it checks for all three and names the fix
 if one is missing, but it won't put a container runtime on your machine behind your back. It
 handles the rest: `~/.trug`, all four tokens, the image, the container, and a `trug` command —
-`up`, `down`, `status`, `logs`, `share`, `set-origin`. Re-running it is the repair path; it never
-touches your data or a live token.
+`up`, `down`, `status`, `logs`, `share`, `set-origin`, `doctor`. Those work from any directory,
+which the raw `docker compose` lines below do not. Re-running the installer is the repair path; it
+never touches your data or a live token.
 
 On a first install it prints your bootstrap token at the end. Open `http://localhost:8000`, choose
 "use an access token", paste it, create your passkey. Then `trug share` for a link and a QR the
@@ -83,6 +84,9 @@ docker compose logs | grep TRUG_BOOTSTRAP_TOKEN
 
 Open `http://localhost:8000`, choose **"use an access token"**, paste that token, and create your
 passkey. Then invite the household from Settings → Members.
+
+The `cd` is load-bearing. Compose commands need a `docker-compose.yml` in the directory you're
+standing in, so run these in the clone or you'll get `no configuration file provided: not found`.
 
 Pull before you bring it up — there's a `build: .` in the compose file, so a plain `up` compiles
 from source instead of taking the 30-second image.
