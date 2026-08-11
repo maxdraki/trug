@@ -350,3 +350,4 @@ older Compose takes.
 - [Connect Claude, or the ring](integrations.md)
 - [Backups, upgrades, and the doctor](operations.md)
 - [Something's wrong](troubleshooting.md)
+- [Running Trug on a hosting platform](hosting.md) — if you're the one offering it to other people
