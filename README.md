@@ -139,6 +139,7 @@ parking lot.
 | [Configuration](docs/configuration.md) | Every setting, and `config.yaml` |
 | [Running it](docs/operations.md) | Backups, restores, upgrades, the doctor, recovery |
 | [Integrations](docs/integrations.md) | MCP for Claude, the Pebble ring, bring-your-own LLM key |
+| [Hosting](docs/hosting.md) | For platform operators — the image, the volume, the UID, the one fiddly setting |
 | [Troubleshooting](docs/troubleshooting.md) | Symptoms and fixes |
 
 **Deploying it with Claude Code.** This repo ships a skill that walks the whole self-host through
