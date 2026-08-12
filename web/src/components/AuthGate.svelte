@@ -15,6 +15,7 @@
   import {
     passkeySupport,
     isCancellation,
+    isCeremonyTimeout,
     performRegistration,
     performAuthentication,
   } from '../lib/passkey';
@@ -262,7 +263,32 @@
     }
   }
 
+  // A ceremony that never answered. Checked before everything else: our own
+  // deadline fired, so nothing the server or the network says is relevant, and
+  // the one useful instruction is "press it again".
+  const CEREMONY_TIMEOUT_MESSAGE =
+    "your device didn't answer. the passkey prompt may never have appeared — press the button to try again.";
+  // The authenticator refused the *kind* of credential asked for. Nothing here
+  // is retryable on this device, so point at a different one.
+  const UNSUPPORTED_AUTHENTICATOR_MESSAGE =
+    "this device can't make the kind of passkey trug asked for. try your phone, or a security key, or paste an access token instead.";
+  // The browser (not the server) refused the RP ID — same root cause as the
+  // server-side rejection below, caught one step earlier.
+  const BAD_ORIGIN_MESSAGE =
+    'your browser rejected the address trug is configured for. run `trug status` on the machine running trug, and fix what it names with `trug set-origin`.';
+  // The authenticator already holds a passkey for this account.
+  const ALREADY_ENROLLED_MESSAGE =
+    'this device already has a passkey for this trug. sign in with it instead of making a new one.';
+
   function friendly(err: unknown): string {
+    if (isCeremonyTimeout(err)) return CEREMONY_TIMEOUT_MESSAGE;
+    if (err instanceof DOMException) {
+      // Each of these is a different problem with a different next step;
+      // collapsing them into one message throws that away.
+      if (err.name === 'NotSupportedError') return UNSUPPORTED_AUTHENTICATOR_MESSAGE;
+      if (err.name === 'SecurityError') return BAD_ORIGIN_MESSAGE;
+      if (err.name === 'InvalidStateError') return ALREADY_ENROLLED_MESSAGE;
+    }
     if (isCancellation(err)) return 'The passkey prompt was dismissed. Try again when ready.';
     // An ApiError is proof the server answered, so it is never an offline
     // problem however `navigator.onLine` feels about it. That flag gets stuck
@@ -308,6 +334,7 @@
       authed = true;
       goNext();
     } catch (err) {
+      console.warn('[trug] passkey enrolment failed', err);
       error = friendly(err);
     } finally {
       busy = false;
@@ -325,6 +352,7 @@
       authed = true;
       goNext();
     } catch (err) {
+      console.warn('[trug] passkey sign-in failed', err);
       error = friendly(err);
     } finally {
       busy = false;
@@ -451,6 +479,9 @@
       authed = true;
       goNext();
     } catch (err) {
+      // Nothing used to be said here at all — a hung or failed first-run claim
+      // left an empty console for the one screen a new deployer sees first.
+      console.warn('[trug] first-account claim failed', err);
       const status = (err as { status?: number } | null)?.status;
       if (status === 403) {
         // 403 covers three different causes: already claimed, wrong bootstrap

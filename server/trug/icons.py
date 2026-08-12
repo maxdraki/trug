@@ -26,6 +26,7 @@ HERBS = "Herbs & Spices"
 FROZEN = "Frozen"
 DRINKS = "Drinks"
 HOUSEHOLD = "Household"
+MEDICINES = "Medicines"
 PET = "Pet"
 OTHER = "Other"
 
@@ -317,6 +318,9 @@ BUILTIN: dict[str, tuple[str, str]] = {
     # the tea and the sweets stay in the cupboard.
     "herbal tea": ("cup", CUPBOARD),
     "sherbet": ("candy", CUPBOARD),
+    # "ear drop" (Medicines) hides inside "pear drops"; the boiled sweets are
+    # confectionery, and "chocolate"/"pear" alone are not long enough to win.
+    "pear drop": ("candy", CUPBOARD),
     # "peppercorn" (10) would otherwise carry the jarred sauce to the spice
     # shelf.
     "peppercorn sauce": ("bottle", CUPBOARD),
@@ -425,6 +429,9 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "soft drink": ("bottle", DRINKS),
     "smoothie": ("bottle", DRINKS),
     "energy drink": ("bottle", DRINKS),
+    # "vitamin" (Medicines) would otherwise carry the bottled drink to the
+    # pharmacy shelf.
+    "vitamin water": ("bottle", DRINKS),
     "beer": ("beer", DRINKS),
     "lager": ("beer", DRINKS),
     "ale": ("beer", DRINKS),
@@ -481,7 +488,6 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "mouthwash": ("bottle", HOUSEHOLD),
     "deodorant": ("bottle", HOUSEHOLD),
     "shaving foam": ("bottle", HOUSEHOLD),
-    "sun cream": ("bottle", HOUSEHOLD),
     "moisturiser": ("bottle", HOUSEHOLD),
     "sponge": ("brush", HOUSEHOLD),
     "scourer": ("brush", HOUSEHOLD),
@@ -489,10 +495,6 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "toothpaste": ("dental", HOUSEHOLD),
     "toothbrush": ("dental", HOUSEHOLD),
     "razor": ("razor", HOUSEHOLD),
-    "paracetamol": ("pills", HOUSEHOLD),
-    "ibuprofen": ("pills", HOUSEHOLD),
-    "vitamin": ("pills", HOUSEHOLD),
-    "plaster": ("first-aid-kit", HOUSEHOLD),
     "battery": ("battery", HOUSEHOLD),
     "light bulb": ("bulb", HOUSEHOLD),
     "matches": ("flame", HOUSEHOLD),
@@ -503,6 +505,103 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "freezer bag": ("package", HOUSEHOLD),
     "sandwich bag": ("package", HOUSEHOLD),
     "nappy": ("diaper", HOUSEHOLD),
+
+    # --- Medicines ----------------------------------------------------
+    # The pharmacy counter. Tablets and supplements -> ``pills``; liquids and
+    # sachets -> ``medicine-syrup``; wound care and topicals -> ``first-aid-kit``.
+    #
+    # Half of this shelf collides with the food aisles on the longest-substring
+    # rule, so several keys exist only to outrank a shorter grocery key. Bare
+    # "cream", "syrup", "drop", "oil", "tablet", "gel" and "spray" are
+    # deliberately NOT keys here: each of them lives inside everyday grocery
+    # phrases ("double cream", "maple syrup", "olive oil", "dishwasher tablet",
+    # "shower gel", "surface spray") that must stay where they are.
+    "paracetamol": ("pills", MEDICINES),
+    "ibuprofen": ("pills", MEDICINES),
+    "nurofen": ("pills", MEDICINES),
+    "anadin": ("pills", MEDICINES),
+    "aspirin": ("pills", MEDICINES),
+    "painkiller": ("pills", MEDICINES),
+    "pain relief": ("pills", MEDICINES),
+    # "pain" (4) is too generic to key on its own — it sits inside nothing here
+    # but would be a standing invitation to misfile; the phrase is the key.
+    "period pain": ("pills", MEDICINES),
+    "medicine": ("medicine-syrup", MEDICINES),
+    # "cough syrup" must be spelt out: a bare "syrup" key would drag maple and
+    # golden syrup out of the cupboard.
+    "cough": ("medicine-syrup", MEDICINES),
+    "cough syrup": ("medicine-syrup", MEDICINES),
+    "cough medicine": ("medicine-syrup", MEDICINES),
+    # "sweets" (6) and "sweet" (5) are Cupboard keys inside these two.
+    "cough sweet": ("pills", MEDICINES),
+    "cough drop": ("pills", MEDICINES),
+    "lozenge": ("pills", MEDICINES),
+    "throat lozenge": ("pills", MEDICINES),
+    "strepsil": ("pills", MEDICINES),
+    "cold and flu": ("pills", MEDICINES),
+    "cold & flu": ("pills", MEDICINES),
+    "lemsip": ("medicine-syrup", MEDICINES),
+    "beechams": ("medicine-syrup", MEDICINES),
+    "calpol": ("medicine-syrup", MEDICINES),
+    "decongestant": ("pills", MEDICINES),
+    "sudafed": ("pills", MEDICINES),
+    "olbas oil": ("medicine-syrup", MEDICINES),
+    "antihistamine": ("pills", MEDICINES),
+    "piriton": ("pills", MEDICINES),
+    "hay fever": ("pills", MEDICINES),
+    "hayfever": ("pills", MEDICINES),
+    "indigestion": ("pills", MEDICINES),
+    "heartburn": ("pills", MEDICINES),
+    "antacid": ("pills", MEDICINES),
+    "rennie": ("pills", MEDICINES),
+    "gaviscon": ("medicine-syrup", MEDICINES),
+    "laxative": ("pills", MEDICINES),
+    "imodium": ("pills", MEDICINES),
+    "rehydration sachet": ("medicine-syrup", MEDICINES),
+    "dioralyte": ("medicine-syrup", MEDICINES),
+    "vitamin": ("pills", MEDICINES),
+    "multivitamin": ("pills", MEDICINES),
+    # "cod" and "fish" are Meat & Fish keys; the supplements are not the fish
+    # counter. ("oil" is 3 chars, below the substring floor, so it never fires.)
+    "cod liver oil": ("pills", MEDICINES),
+    "fish oil": ("pills", MEDICINES),
+    "plaster": ("first-aid-kit", MEDICINES),
+    "bandage": ("first-aid-kit", MEDICINES),
+    "dressing pad": ("first-aid-kit", MEDICINES),
+    "first aid": ("first-aid-kit", MEDICINES),
+    "first aid kit": ("first-aid-kit", MEDICINES),
+    # "cream" (5, Dairy) sits inside "antiseptic cream" and "suncream"; every
+    # medicinal cream therefore needs a key longer than five characters.
+    "antiseptic": ("first-aid-kit", MEDICINES),
+    "savlon": ("first-aid-kit", MEDICINES),
+    "germolene": ("first-aid-kit", MEDICINES),
+    "sudocrem": ("first-aid-kit", MEDICINES),
+    "tcp": ("first-aid-kit", MEDICINES),
+    "ibuprofen gel": ("first-aid-kit", MEDICINES),
+    "arnica": ("first-aid-kit", MEDICINES),
+    # "spray" is the Household shelf slug and lives inside three cleaning keys;
+    # the full phrase keeps the medicine out of the cupboard under the sink.
+    "nasal spray": ("spray", MEDICINES),
+    "insect repellent": ("spray", MEDICINES),
+    "repellent": ("spray", MEDICINES),
+    "sun cream": ("sun", MEDICINES),
+    "suncream": ("sun", MEDICINES),
+    "sunscreen": ("sun", MEDICINES),
+    "sun screen": ("sun", MEDICINES),
+    "sun lotion": ("sun", MEDICINES),
+    "after sun": ("sun", MEDICINES),
+    "aftersun": ("sun", MEDICINES),
+    "eye drop": ("droplet", MEDICINES),
+    "ear drop": ("droplet", MEDICINES),
+    "contact lens": ("droplet", MEDICINES),
+    "lens solution": ("droplet", MEDICINES),
+    "hand sanitiser": ("bottle", MEDICINES),
+    "hand sanitizer": ("bottle", MEDICINES),
+    "sanitiser": ("bottle", MEDICINES),
+    "sanitizer": ("bottle", MEDICINES),
+    "thermometer": ("thermometer", MEDICINES),
+    "pregnancy test": ("test-pipe", MEDICINES),
+    "condom": ("package", MEDICINES),
 
     # --- Pet ----------------------------------------------------------
     "dog food": ("dog", PET),

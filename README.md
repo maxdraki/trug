@@ -111,7 +111,7 @@ signed-in devices, invite links, and the connection details for AI assistants an
 Your whole instance is one SQLite file, so a backup is one command and a restore is three.
 
 <p align="center">
-  <img src="docs/img/settings-collapsible.png" alt="Trug settings — collapsible sections for theme, accent, devices, connections, and invites" width="320">
+  <img src="docs/img/settings-collapsible.png" alt="Trug settings — collapsible sections for theme, accent, density, devices, connections, AI enrichment and members" width="320">
 </p>
 
 ## Philosophy

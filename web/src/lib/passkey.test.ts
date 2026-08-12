@@ -5,6 +5,8 @@ import {
   isPasskeySupported,
   passkeySupport,
   isCancellation,
+  isCeremonyTimeout,
+  ceremonyDeadlineMs,
   performRegistration,
   performAuthentication,
 } from './passkey';
@@ -230,5 +232,108 @@ describe('ceremony translation', () => {
     await expect(
       performAuthentication({ challenge: bytesToBase64url(new Uint8Array([1])) }),
     ).rejects.toThrow();
+  });
+});
+
+// A ceremony that never settles used to hang the caller forever: the WebAuthn
+// `timeout` option is only a hint, and a flaky security key, a stolen biometric
+// prompt or a sleeping device can all leave the promise pending for good.
+describe('ceremony deadline', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  const regOptions = (extra: Record<string, unknown> = {}) => ({
+    challenge: bytesToBase64url(new Uint8Array([1])),
+    user: { id: bytesToBase64url(new Uint8Array([2])), name: 'a', displayName: 'a' },
+    ...extra,
+  });
+
+  it("stays above the server's advisory timeout rather than inventing a shorter one", () => {
+    // Firing before the browser's own deadline would abort ceremonies the
+    // browser still considers live.
+    expect(ceremonyDeadlineMs({ timeout: 60000 })).toBeGreaterThan(60000);
+    expect(ceremonyDeadlineMs({ timeout: 120000 })).toBeGreaterThan(120000);
+    // No (or nonsense) advisory value still gets a generous floor.
+    expect(ceremonyDeadlineMs({})).toBeGreaterThanOrEqual(60000);
+    expect(ceremonyDeadlineMs({ timeout: -1 })).toBeGreaterThanOrEqual(60000);
+  });
+
+  it('rejects a registration that never settles, and aborts the ceremony', async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const create = vi.fn((opts: any) => {
+      signal = opts.signal;
+      return new Promise<never>(() => {});
+    });
+    vi.stubGlobal('navigator', { credentials: { create } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const deadline = ceremonyDeadlineMs({ timeout: 60000 });
+    const pending = performRegistration(regOptions({ timeout: 60000 }));
+    let settled = false;
+    pending.catch(() => {}).finally(() => (settled = true));
+
+    // Still waiting a whisker before the deadline — an honest slow ceremony
+    // (digging a key out of a drawer) must not be cut short.
+    await vi.advanceTimersByTimeAsync(deadline - 1000);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await expect(pending).rejects.toSatisfy(isCeremonyTimeout);
+    expect(signal?.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('[trug]'), expect.anything());
+    warn.mockRestore();
+  });
+
+  it('rejects a sign-in that never settles', async () => {
+    vi.useFakeTimers();
+    const get = vi.fn(() => new Promise<never>(() => {}));
+    vi.stubGlobal('navigator', { credentials: { get } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const pending = performAuthentication({ challenge: bytesToBase64url(new Uint8Array([1])) });
+    // Attach a handler up front: the rejection lands while the timers are being
+    // advanced, before the assertion below could catch it.
+    pending.catch(() => {});
+    await vi.advanceTimersByTimeAsync(ceremonyDeadlineMs({}) + 1000);
+    await expect(pending).rejects.toSatisfy(isCeremonyTimeout);
+    warn.mockRestore();
+  });
+
+  it('does not report a user cancellation as a timeout', async () => {
+    const cancel = new DOMException('The operation was aborted', 'NotAllowedError');
+    vi.stubGlobal('navigator', {
+      credentials: {
+        create: vi.fn(async () => {
+          throw cancel;
+        }),
+      },
+    });
+    await expect(performRegistration(regOptions())).rejects.toBe(cancel);
+    expect(isCeremonyTimeout(cancel)).toBe(false);
+  });
+
+  it('leaves no timer running once a ceremony succeeds', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', {
+      credentials: {
+        get: vi.fn(async () => ({
+          id: 'c',
+          rawId: buf(1),
+          type: 'public-key',
+          getClientExtensionResults: () => ({}),
+          response: {
+            clientDataJSON: buf(1),
+            authenticatorData: buf(2),
+            signature: buf(3),
+            userHandle: null,
+          },
+        })),
+      },
+    });
+    await performAuthentication({ challenge: bytesToBase64url(new Uint8Array([1])) });
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

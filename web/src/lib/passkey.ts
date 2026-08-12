@@ -121,6 +121,89 @@ export function isCancellation(err: unknown): boolean {
   return err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'AbortError');
 }
 
+// --- ceremony deadline -------------------------------------------------------
+
+/**
+ * Thrown when a ceremony never settles. Deliberately NOT a DOMException named
+ * `AbortError`: that is what a user-cancelled prompt looks like, and the two
+ * must be told apart — "you cancelled" and "your device never answered" send
+ * someone to look for entirely different problems.
+ */
+export class PasskeyTimeoutError extends Error {
+  constructor(public readonly deadlineMs: number) {
+    super(`The passkey ceremony did not answer within ${deadlineMs}ms.`);
+    this.name = 'PasskeyTimeoutError';
+  }
+}
+
+/** True when a ceremony failed because it exceeded our own deadline. */
+export function isCeremonyTimeout(err: unknown): boolean {
+  return err instanceof PasskeyTimeoutError;
+}
+
+/**
+ * Our deadline must never fire before the browser's own. The server sends an
+ * advisory `timeout` in the ceremony options (py_webauthn's default is 60s), so
+ * take that as the floor rather than inventing a number that contradicts it,
+ * and add a grace margin: the advisory clock starts inside the browser, while
+ * ours starts before the prompt has even been drawn, and a real ceremony is
+ * slow on purpose — finding a security key in a drawer, reading the prompt on a
+ * phone, waiting out a fingerprint retry. 60s + 30s = 90s for the server's
+ * default: long enough that no honest attempt is cut short, short enough that a
+ * wedged ceremony doesn't read as "this software is broken".
+ */
+export const CEREMONY_TIMEOUT_FLOOR_MS = 60_000;
+export const CEREMONY_TIMEOUT_GRACE_MS = 30_000;
+
+export function ceremonyDeadlineMs(options: { timeout?: unknown }): number {
+  const advertised = options?.timeout;
+  const advisory =
+    typeof advertised === 'number' && Number.isFinite(advertised) && advertised > 0 ? advertised : 0;
+  return Math.max(advisory, CEREMONY_TIMEOUT_FLOOR_MS) + CEREMONY_TIMEOUT_GRACE_MS;
+}
+
+/**
+ * Bound a credential call. `PublicKeyCredentialCreationOptions.timeout` is only
+ * a hint — browsers may ignore it, and when they do the returned promise simply
+ * never settles (a flaky external key, a biometric prompt stolen by another
+ * app, a device that sleeps mid-prompt). That left the caller pinned on a
+ * "creating…" button with no way out.
+ *
+ * Two mechanisms, because neither alone is enough: the `AbortSignal` is the
+ * spec's real cancellation channel and it tears the native prompt down, but a
+ * browser that ignored the timeout can equally leave the aborted promise
+ * pending — so the race is what actually guarantees the caller gets control
+ * back. The signal is best-effort cleanup; the race is the guarantee.
+ */
+async function withDeadline<T>(
+  options: { timeout?: unknown },
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const deadline = ceremonyDeadlineMs(options);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      console.warn(
+        `[trug] passkey ceremony got no answer within ${deadline}ms; aborting it so you can retry`,
+        { deadline },
+      );
+      controller.abort(new DOMException('Trug ceremony deadline reached', 'TimeoutError'));
+      reject(new PasskeyTimeoutError(deadline));
+    }, deadline);
+  });
+
+  const running = run(controller.signal);
+  // The loser of the race still settles later; keep its rejection from
+  // surfacing as an unhandled promise rejection. Race handlers are unaffected.
+  running.catch(() => {});
+  try {
+    return await Promise.race([running, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // --- ceremony shape translation ---------------------------------------------
 
 type Descriptor = { id: string; type: string; transports?: string[] };
@@ -162,7 +245,10 @@ export async function performRegistration(
     excludeCredentials: toDescriptors(options.excludeCredentials),
   };
 
-  const credential = (await navigator.credentials.create({ publicKey })) as PublicKeyCredential | null;
+  const credential = (await withDeadline(
+    options,
+    (signal) => navigator.credentials.create({ publicKey, signal }),
+  )) as PublicKeyCredential | null;
   if (!credential) throw new Error('No credential was created.');
   const response = credential.response as AuthenticatorAttestationResponse;
   const transports =
@@ -195,7 +281,10 @@ export async function performAuthentication(
     allowCredentials: toDescriptors(options.allowCredentials),
   };
 
-  const credential = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential | null;
+  const credential = (await withDeadline(
+    options,
+    (signal) => navigator.credentials.get({ publicKey, signal }),
+  )) as PublicKeyCredential | null;
   if (!credential) throw new Error('No credential was returned.');
   const response = credential.response as AuthenticatorAssertionResponse;
 

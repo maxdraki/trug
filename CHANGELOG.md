@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-12
+
+### Added
+
+- **A Medicines aisle**, between Household and Pet — the far end of the non-food run, which is
+  where the pharmacy counter actually is. Nasal spray had been landing next to the bin bags.
+
+### Fixed
+
+- **Creating a passkey could hang the screen forever.** If the ceremony never answered, the button
+  said "creating…" until you reloaded — no timeout, no error, no retry. It is the first screen a
+  new install shows, so it read as software that doesn't work. A ceremony is now bounded (using the
+  timeout the server already advertises, floored and given grace so a real one is never cut short),
+  and a device that doesn't answer gets a message and the button back, with what you typed intact.
+  A prompt you dismiss yourself still says so — the two are deliberately different.
+- **Four items were filed under the wrong aisle**, all through the same longest-match rule: "sun
+  cream" and "antiseptic cream" resolved to Dairy & Eggs through the five-letter "cream", "cough
+  sweets" to Cupboard through "sweets", and "vitamin water" to Household. There is now a test that
+  no built-in name's singular or plural is another name in a different aisle.
+- **An item with no icon showed its first letter in a colour unrelated to your accent**, which read
+  as a bug rather than a fallback — and measured 2.43:1 in the light theme, so it was hard to read
+  as well as out of place. The letter now sits on an accent-tinted chip like every other row, at
+  5.58:1 or better across every theme and accent.
+
+### Changed
+
+- README screenshots reshot for the new UI: edge-to-edge list, shelf-label counts, text pills, the
+  basket drawer and the Density setting. The demo GIF still shows the older list and stays for now.
+
 ## [0.3.0] - 2026-08-12
 
 ### Security

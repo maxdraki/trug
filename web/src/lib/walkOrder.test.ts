@@ -55,6 +55,19 @@ describe('walk order', () => {
     expect(WALK_ORDER.indexOf('Herbs & Spices')).toBe(WALK_ORDER.indexOf('Cupboard') + 1);
   });
 
+  it('shelves medicines with the non-food block, directly after household', () => {
+    expect(WALK_ORDER.indexOf('Medicines')).toBe(WALK_ORDER.indexOf('Household') + 1);
+    expect(WALK_ORDER.indexOf('Medicines')).toBeLessThan(WALK_ORDER.indexOf('Pet'));
+  });
+
+  it('labels the medicines shelf with a glyph the item rows do not use', () => {
+    // Rows in this aisle carry `pills`; the shelf label is the single `pill`,
+    // the same near-but-distinct pairing as `leaf-2` over the herb rows.
+    expect(CATEGORY_ICON.Medicines).toBe('pill');
+    expect(ICONS.pill).toBeTruthy();
+    expect(ICONS.pill).not.toBe(ICONS.pills);
+  });
+
   it('gives every aisle a shelf-label icon that exists in the generated map', () => {
     for (const category of WALK_ORDER) {
       const slug = CATEGORY_ICON[category];
