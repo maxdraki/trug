@@ -39,6 +39,8 @@ const UI_SLUGS = [
   'archive',
   'glass-full',
   'leaf-2',
+  // Medicines shelf label: the single tablet, against the `pills` pair on its rows.
+  'pill',
   // Right-swipe reveal: the gesture checks the item off, so it shows a tick.
   'check',
   'shopping-bag',

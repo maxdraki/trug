@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { tick } from 'svelte';
 import AuthGate from './AuthGate.svelte';
 import { ApiError } from '../lib/api';
 import { writeSnapshot, hasSnapshot, clearSnapshot } from '../lib/snapshot';
@@ -59,13 +60,19 @@ vi.mock('../lib/api', () => ({
 
 const performRegistration = vi.fn();
 const performAuthentication = vi.fn();
-vi.mock('../lib/passkey', () => ({
-  isPasskeySupported: () => true,
-  passkeySupport: () => 'ok',
-  isCancellation: (e: unknown) => e instanceof DOMException && e.name === 'NotAllowedError',
-  performRegistration: (...a: unknown[]) => performRegistration(...a),
-  performAuthentication: (...a: unknown[]) => performAuthentication(...a),
-}));
+// The ceremony wrappers are stubbed (jsdom has no WebAuthn), but the pure
+// predicates/constants come from the real module so the component's error
+// mapping is tested against the classifications it will actually see.
+vi.mock('../lib/passkey', async () => {
+  const actual = await vi.importActual<typeof import('../lib/passkey')>('../lib/passkey');
+  return {
+    ...actual,
+    isPasskeySupported: () => true,
+    passkeySupport: () => 'ok',
+    performRegistration: (...a: unknown[]) => performRegistration(...a),
+    performAuthentication: (...a: unknown[]) => performAuthentication(...a),
+  };
+});
 
 // A no-op children snippet: when the gate hands off (authed), it renders the
 // snippet and its own form disappears — enough to prove the state transition.
@@ -905,5 +912,169 @@ describe('AuthGate — inconclusive probe never accuses the token', () => {
       await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
       await waitFor(() => expect(setToken).toHaveBeenCalledWith('mcp-tok'));
     });
+  });
+});
+
+// A WebAuthn ceremony can simply never settle — a flaky security key, a
+// biometric prompt stolen by something else, a device that sleeps mid-prompt.
+// The gate used to sit on that unresolved promise forever, showing "creating…"
+// with no timeout, no error and no retry. Every awaited ceremony must now be
+// bounded and must recover WITHOUT losing what the user typed.
+describe('AuthGate — a hung ceremony recovers', () => {
+  let realPasskey: typeof import('../lib/passkey');
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    getToken.mockReturnValue(null);
+    hasCookieSession.mockResolvedValue(false);
+    probeAuthStatus.mockResolvedValue('lost');
+    probeToken.mockResolvedValue('lost');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: true });
+    bootstrapClaimOptions.mockResolvedValue(ceremonyOptions);
+    registerOptions.mockResolvedValue(ceremonyOptions);
+    loginOptions.mockResolvedValue({ challenge: 'AQID' });
+    realPasskey = await vi.importActual<typeof import('../lib/passkey')>('../lib/passkey');
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    warn.mockRestore();
+  });
+
+  // Minimal well-formed server options: the real ceremony wrapper decodes them
+  // before it ever touches the authenticator.
+  const ceremonyOptions = {
+    challenge: 'AQID',
+    user: { id: 'AQI', name: 'alice', displayName: 'alice' },
+    rp: { id: 'localhost', name: 'Trug' },
+    pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+    timeout: 60000,
+  };
+
+  /** A `navigator.credentials` whose ceremony never answers. */
+  function hangingAuthenticator() {
+    const create = vi.fn(() => new Promise<never>(() => {}));
+    const get = vi.fn(() => new Promise<never>(() => {}));
+    vi.stubGlobal('navigator', {
+      onLine: true,
+      credentials: { create, get },
+      userAgent: 'test',
+    });
+    return { create, get };
+  }
+
+  /** Run the real (bounded) wrapper instead of the stub, for hang tests. */
+  function useRealCeremonies() {
+    performRegistration.mockImplementation((o: any) => realPasskey.performRegistration(o));
+    performAuthentication.mockImplementation((o: any) => realPasskey.performAuthentication(o));
+  }
+
+  async function pastTheDeadline() {
+    await vi.advanceTimersByTimeAsync(realPasskey.ceremonyDeadlineMs(ceremonyOptions) + 5000);
+    await tick();
+  }
+
+  async function reachClaimPanel() {
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const token = await screen.findByLabelText('Bootstrap token');
+    await fireEvent.input(token, { target: { value: 'boot-secret' } });
+    await fireEvent.click(screen.getByRole('button', { name: /open list/i }));
+    const name = await screen.findByLabelText('Your name');
+    await fireEvent.input(name, { target: { value: 'Alice' } });
+  }
+
+  it('unsticks the first-run claim, keeps the typed name, and can be pressed again', async () => {
+    const { create } = hangingAuthenticator();
+    useRealCeremonies();
+    await reachClaimPanel();
+
+    vi.useFakeTimers();
+    await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+    expect(screen.getByRole('button', { name: /creating/i })).toBeTruthy();
+
+    await pastTheDeadline();
+
+    // Visible, actionable failure — not a permanent "creating…".
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/didn't answer|try again/i);
+    expect(alert.textContent).not.toMatch(/dismissed|cancel/i);
+    // Resting state, with everything typed still in hand.
+    const button = screen.getByRole('button', { name: /create your passkey/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    expect((screen.getByLabelText('Your name') as HTMLInputElement).value).toBe('Alice');
+
+    // And a second press starts a genuinely fresh ceremony with the held token.
+    await fireEvent.click(button);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(bootstrapClaimOptions).toHaveBeenLastCalledWith('Alice', 'boot-secret');
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it('unsticks a hung sign-in', async () => {
+    hangingAuthenticator();
+    useRealCeremonies();
+    bootstrapState.mockResolvedValue({ claimable: false });
+    render(AuthGate, { children: noopChildren, initialSupported: true });
+    const button = await screen.findByRole('button', { name: /^sign in$/i });
+
+    vi.useFakeTimers();
+    await fireEvent.click(button);
+    expect(screen.getByRole('button', { name: /signing in/i })).toBeTruthy();
+    await pastTheDeadline();
+
+    expect(screen.getByRole('alert').textContent).toMatch(/didn't answer|try again/i);
+    expect((screen.getByRole('button', { name: /^sign in$/i }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('unsticks a hung invite enrolment', async () => {
+    hangingAuthenticator();
+    useRealCeremonies();
+    render(AuthGate, { children: noopChildren, initialInvite: 'inv-1', initialSupported: true });
+    const button = await screen.findByRole('button', { name: /create your passkey/i });
+
+    vi.useFakeTimers();
+    await fireEvent.click(button);
+    await pastTheDeadline();
+
+    expect(screen.getByRole('alert').textContent).toMatch(/didn't answer|try again/i);
+    expect(
+      (screen.getByRole('button', { name: /create your passkey/i }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('still reads as "you cancelled" when the user dismisses the prompt', async () => {
+    // The two must never be conflated: blaming the user's own cancellation on a
+    // timeout (or vice versa) sends them looking for the wrong problem.
+    performRegistration.mockRejectedValue(new DOMException('x', 'NotAllowedError'));
+    await reachClaimPanel();
+    await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/dismissed/i);
+    expect(alert.textContent).not.toMatch(/didn't answer/i);
+  });
+
+  it('names an authenticator that cannot make this passkey', async () => {
+    performRegistration.mockRejectedValue(new DOMException('x', 'NotSupportedError'));
+    await reachClaimPanel();
+    await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/device|security key/i);
+    expect(alert.textContent).not.toMatch(/didn't answer|dismissed/i);
+  });
+
+  it('points a browser-side origin mismatch at the address, not at the device', async () => {
+    performRegistration.mockRejectedValue(new DOMException('x', 'SecurityError'));
+    await reachClaimPanel();
+    await fireEvent.click(screen.getByRole('button', { name: /create your passkey/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/address|origin/i);
   });
 });

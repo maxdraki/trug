@@ -580,9 +580,25 @@
     line-height: 1;
     transform-origin: center;
   }
+  /* No icon resolved, so the chip shows the name's first letter. It joins the
+     accent scope below by the FILL rather than the glyph, and that swap is the
+     whole rule: a line icon is a graphic (3:1), a letter is text (4.5:1), and
+     accent-on-accent-wash does not clear 4.5:1 in Latte for any accent Settings
+     offers — 2.03:1 on yellow and pink, 2.23 peach, 2.52 green, 3.53 blue,
+     3.83 mauve, and no darker mix of the accent rescues it either (accent 55%
+     into text still measures 3.3–3.7 on peach, green, pink and yellow). It used
+     to be lavender-on-lavender, which failed the same way (2.43:1 in Latte) AND
+     picked a hue with nothing to do with the shopper's accent, so a perfectly
+     ordinary fallback read as a bug.
+
+     So: the accent washes the square, and the letter stays --ctp-text, which is
+     what `.chip` already sets — hence no `color` here. Measured 5.56:1 at worst
+     (Frappé/yellow) across all four flavours × all six accents; see the
+     contrast test in ItemRow.test.ts, which reads these declarations. Same 16%
+     wash the chip's ink fill weighs in at, so it is one family, one weight, one
+     step off the row. */
   .chip.monogram {
-    background: color-mix(in srgb, var(--ctp-lavender) 16%, var(--ctp-base));
-    color: var(--ctp-lavender);
+    background: color-mix(in srgb, var(--accent) 16%, var(--ctp-base));
     font-family: var(--font-display);
     font-weight: 500;
     font-size: 15px;

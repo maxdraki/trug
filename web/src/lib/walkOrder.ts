@@ -17,6 +17,9 @@ export const CATEGORY_ICON: Record<string, string> = {
   Frozen: 'snowflake',
   Drinks: 'glass-full',
   Household: 'spray',
+  // A single tablet, not the `pills` pair the rows in this aisle carry, so the
+  // shelf label stays distinct from the items under it (as `leaf-2` does).
+  Medicines: 'pill',
   Pet: 'paw',
   Other: 'shopping-bag',
 };
@@ -31,6 +34,7 @@ export const WALK_ORDER: string[] = [
   'Frozen',
   'Drinks',
   'Household',
+  'Medicines',
   'Pet',
   'Other',
 ];
