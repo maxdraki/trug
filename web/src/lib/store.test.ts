@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createStore, midpointSortKey } from './store.svelte';
 import { OpQueue } from './opqueue';
 import { ApiError } from './api';
@@ -99,6 +99,202 @@ describe('createStore', () => {
     expect(ids.has('server-xyz')).toBe(true);
     expect(ids.has(optId)).toBe(false);
     expect(store.pendingIds.has(optId)).toBe(false);
+  });
+
+  it('a check queued against an optimistic id survives the dedup swap', async () => {
+    // Silent data loss during a normal offline shop: you add something the
+    // client cannot tell is a duplicate (the server's dedup is broader — it
+    // folds plurals via the catalogue), check it off in the aisle, and when
+    // connectivity returns the add is deduped onto an EXISTING row with a
+    // different id. The queued `check` then named an id the server had never
+    // heard of, 404'd, and was dropped — the item you physically put in the
+    // trolley came back unchecked with no error shown.
+    const addItem = vi.fn<() => Promise<{ item: Item; created: boolean }>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const setStatus = vi.fn<(id: string, status: string) => Promise<Item>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const api = fakeApi({ addItem, setStatus });
+    const queue = freshQueue();
+    const store = createStore({ api, queue, walkOrder: ['Other', 'Produce'] });
+
+    // --- offline: add, then check off in the aisle ---
+    await store.add('Bananas');
+    const optId = flat(store).find((i) => i.name === 'Bananas')!.id;
+    await store.toggle(optId);
+    expect(store.online).toBe(false);
+    expect(store.checked.map((i) => i.id)).toEqual([optId]);
+    expect((await queue.pending()).length).toBe(2);
+
+    // --- back online: the add is deduped onto an existing row ---
+    const server = item({ id: 'banana-1', name: 'Bananas', category: 'Produce' });
+    addItem.mockImplementation(() => Promise.resolve({ item: server, created: false }));
+    const statusCalls: [string, string][] = [];
+    setStatus.mockImplementation(async (id: string, status: string) => {
+      if (id !== server.id) throw new ApiError(404, 'not found');
+      statusCalls.push([id, status]);
+      return item({ ...server, status: status as any, checked_at: '2026-08-05T00:00:00Z' });
+    });
+    api.list.mockResolvedValue({
+      active: {},
+      checked: [item({ ...server, status: 'checked', checked_at: '2026-08-05T00:00:00Z' })],
+    });
+
+    await store.retry();
+
+    // Load-bearing: the check actually reached the server, against the id the
+    // server handed back — not the dead optimistic one.
+    expect(statusCalls).toEqual([['banana-1', 'checked']]);
+    expect((await queue.pending()).length).toBe(0);
+    expect(store.checked.map((i) => i.id)).toEqual(['banana-1']);
+    expect(flat(store)).toHaveLength(0);
+  });
+
+  it('rewrites a queued delete onto the deduped id too, and keeps it pending', async () => {
+    const addItem = vi.fn<() => Promise<{ item: Item; created: boolean }>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const remove = vi.fn<(id: string) => Promise<void>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const api = fakeApi({ addItem, remove });
+    const queue = freshQueue();
+    const store = createStore({ api, queue, walkOrder: ['Other', 'Produce'] });
+
+    await store.add('Bananas');
+    const optId = flat(store).find((i) => i.name === 'Bananas')!.id;
+    await store.remove(optId);
+    expect((await queue.pending()).length).toBe(2);
+
+    // The add resolves onto an existing row, but the network dies again before
+    // the delete goes out: the row must not reappear on the shelf, and its id
+    // must stay pending so an SSE echo can't resurrect it either.
+    const server = item({ id: 'banana-1', name: 'Bananas', category: 'Produce' });
+    addItem.mockImplementation(() => Promise.resolve({ item: server, created: false }));
+    await store.retry().catch(() => {});
+
+    expect(flat(store).some((i) => i.name === 'Bananas')).toBe(false);
+    expect(store.pendingIds.has('banana-1')).toBe(true);
+    expect((await queue.pending()).map((o) => o.itemId)).toEqual(['banana-1']);
+  });
+
+  it('a storage failure while repointing is reported as storage, never as offline', async () => {
+    // The rewrite is IndexedDB work, not network work. Quota exhaustion, Safari
+    // private browsing, an aborted transaction — none of them mean the network
+    // is down, so none of them may raise the "you're offline — changes are saved
+    // and will sync" banner, which would be false on both counts. The add
+    // itself succeeded, so it must still leave the queue.
+    const addItem = vi.fn<() => Promise<{ item: Item; created: boolean }>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const setStatus = vi.fn<(id: string, status: string) => Promise<Item>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const api = fakeApi({ addItem, setStatus });
+    const queue = freshQueue();
+    const store = createStore({ api, queue, walkOrder: ['Other', 'Produce'] });
+
+    await store.add('Bananas');
+    const optId = flat(store).find((i) => i.name === 'Bananas')!.id;
+    await store.toggle(optId);
+    expect((await queue.pending()).length).toBe(2);
+
+    const server = item({ id: 'banana-1', name: 'Bananas', category: 'Produce' });
+    addItem.mockImplementation(() => Promise.resolve({ item: server, created: false }));
+    // The replay must reach this op at all (the queue must not wedge), and the
+    // store must not have gone "offline" on the way past the storage failure.
+    const onlineDuringReplay: boolean[] = [];
+    setStatus.mockImplementation(async (id: string) => {
+      onlineDuringReplay.push(store.online);
+      if (id !== server.id) throw new ApiError(404, 'not found');
+      return item({ ...server, status: 'checked', checked_at: '2026-08-05T00:00:00Z' });
+    });
+    api.list.mockResolvedValue({ active: { Produce: [server] }, checked: [] });
+    const quota = new DOMException('quota exceeded', 'QuotaExceededError');
+    vi.spyOn(queue, 'rewriteItemId').mockRejectedValue(quota);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await store.retry();
+
+      // The network is fine: no offline banner, no wedged queue.
+      expect(onlineDuringReplay).toEqual([true]);
+      expect(store.online).toBe(true);
+      expect((await queue.pending()).some((o) => o.kind === 'add')).toBe(false);
+      expect(errors.mock.calls.some((c) => String(c[0]).startsWith('[trug]'))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('re-applies rewritten ops over the deduped row without waiting for a refresh', async () => {
+    // Both dedup tests above end in a refresh(), which re-applies the queue from
+    // scratch and would mask a broken re-apply inside reconcileAdd. Drive the
+    // drain alone: the row must already read as checked and pending.
+    const addItem = vi.fn<() => Promise<{ item: Item; created: boolean }>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const setStatus = vi.fn<(id: string, status: string) => Promise<Item>>(() =>
+      Promise.reject(new TypeError('fetch failed')),
+    );
+    const api = fakeApi({ addItem, setStatus });
+    const queue = freshQueue();
+    const store = createStore({ api, queue, walkOrder: ['Other', 'Produce'] });
+
+    await store.add('Bananas');
+    const optId = flat(store).find((i) => i.name === 'Bananas')!.id;
+    await store.toggle(optId);
+    expect((await queue.pending()).length).toBe(2);
+
+    // The add lands on an existing server row; the check-off behind it does NOT
+    // get through (still offline), and no refresh runs at all.
+    const server = item({ id: 'banana-1', name: 'Bananas', category: 'Produce' });
+    addItem.mockImplementation(() => Promise.resolve({ item: server, created: false }));
+    api.list.mockRejectedValue(new TypeError('fetch failed'));
+
+    await store.retry().catch(() => {}); // drain succeeds for the add, refresh fails
+
+    expect(store.checked.map((i) => i.id)).toEqual(['banana-1']);
+    expect(flat(store).some((i) => i.name === 'Bananas')).toBe(false);
+    expect(store.pendingIds.has('banana-1')).toBe(true);
+    expect((await queue.pending()).map((o) => [o.kind, o.itemId])).toEqual([['check', 'banana-1']]);
+  });
+
+  it('reconciles against the row that was marked pending, not the id the op carried', async () => {
+    // add() renders a LOCAL match (`existing.id`) and marks that id pending,
+    // while the op carries a fresh uuid so the server's reactivate branch runs.
+    // If the server folds onto a third row, reconciling against the op's id
+    // leaves the rendered row on screen, stuck pending forever.
+    const d = deferred<{ item: Item; created: boolean }>();
+    const api = fakeApi({
+      list: vi.fn(() =>
+        Promise.resolve({ active: { Dairy: [item({ id: 'milk-local', name: 'Milk', category: 'Dairy' })] }, checked: [] }),
+      ),
+      addItem: vi.fn(() => d.promise),
+    });
+    const queue = freshQueue();
+    const store = createStore({ api, queue, walkOrder: ['Other', 'Dairy'] });
+    await store.refresh();
+
+    const rewrite = vi.spyOn(queue, 'rewriteItemId');
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const p = store.add('Milk');
+      expect(store.pendingIds.has('milk-local')).toBe(true);
+
+      // The server folded onto a third row (its matching is broader than ours).
+      d.resolve({ item: item({ id: 'milk-server', name: 'Milk', category: 'Dairy' }), created: false });
+      await p;
+
+      expect(flat(store).map((i) => i.id)).toEqual(['milk-server']);
+      expect(store.pendingIds.size).toBe(0);
+      // The rewrite must repoint the id queued ops actually name.
+      expect(rewrite).toHaveBeenCalledWith('milk-local', 'milk-server');
+      expect(warns.mock.calls.some((c) => String(c[0]).startsWith('[trug]'))).toBe(true);
+    } finally {
+      warns.mockRestore();
+    }
   });
 
   it('re-adding a checked item moves that row — no Other detour, no duplicate', async () => {
@@ -409,6 +605,155 @@ describe('createStore', () => {
     expect(store.groups.find((g) => g.category === 'Dairy')?.items.some((i) => i.id === 'a')).toBe(true);
     expect(store.groups.find((g) => g.category === 'Other')?.items.some((i) => i.id === 'a')).toBe(false);
     expect(store.online).toBe(false);
+  });
+});
+
+describe('a storage failure never silently eats a change', () => {
+  // Every mutation applies its optimistic change FIRST and then enqueues the
+  // durable op. `enqueue` rejects on any IndexedDB fault — quota, Safari private
+  // browsing, a blocked or corrupt database — and nobody was catching it: the
+  // row showed on the shelf with a "queued" chip, was never sent, was never
+  // durably queued, and vanished at the next refresh. clearChecked was worst:
+  // the whole basket disappeared locally with no `clear` op anywhere.
+  const quota = () => new DOMException('quota exceeded', 'QuotaExceededError');
+
+  function brokenStorageStore(overrides: Record<string, any> = {}) {
+    const api = fakeApi(overrides);
+    const queue = freshQueue();
+    const errors: string[] = [];
+    const store = createStore({
+      api,
+      queue,
+      walkOrder: ['Other', 'Dairy'],
+      onError: (m) => errors.push(m),
+    });
+    return { api, queue, store, errors };
+  }
+
+  const silenceConsoleError = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+  let consoleError: ReturnType<typeof silenceConsoleError>;
+  beforeEach(() => {
+    consoleError = silenceConsoleError();
+  });
+  afterEach(() => consoleError.mockRestore());
+
+  function expectReported(errors: string[]) {
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/couldn't/i);
+    expect(consoleError.mock.calls.some((c) => String(c[0]).startsWith('[trug]'))).toBe(true);
+  }
+
+  it('rolls back an add whose op cannot be stored', async () => {
+    const { queue, store, errors, api } = brokenStorageStore();
+    vi.spyOn(queue, 'enqueue').mockRejectedValue(quota());
+
+    await store.add('Milk');
+
+    expect(flat(store).some((i) => i.name === 'Milk')).toBe(false);
+    expect(store.pendingIds.size).toBe(0);
+    expect(api.addItem).not.toHaveBeenCalled();
+    expectReported(errors);
+  });
+
+  it('rolls an add back onto the checked row it reactivated', async () => {
+    const { queue, store, errors } = brokenStorageStore({
+      list: vi.fn(() =>
+        Promise.resolve({
+          active: {},
+          checked: [item({ id: 'milk-1', name: 'Milk', category: 'Dairy', status: 'checked' })],
+        }),
+      ),
+    });
+    await store.refresh();
+    vi.spyOn(queue, 'enqueue').mockRejectedValue(quota());
+
+    await store.add('Milk');
+
+    // The row goes back into the basket rather than sitting active-but-unsaved.
+    expect(store.checked.map((i) => i.id)).toEqual(['milk-1']);
+    expect(flat(store).some((i) => i.name === 'Milk')).toBe(false);
+    expect(store.pendingIds.size).toBe(0);
+    expectReported(errors);
+  });
+
+  it('un-ticks a check whose op cannot be stored', async () => {
+    const { queue, store, errors } = brokenStorageStore({
+      list: vi.fn(() =>
+        Promise.resolve({ active: { Other: [item({ id: 'x', name: 'Bread' })] }, checked: [] }),
+      ),
+    });
+    await store.refresh();
+    vi.spyOn(queue, 'enqueue').mockRejectedValue(quota());
+
+    await store.toggle('x');
+
+    expect(store.checked).toHaveLength(0);
+    expect(flat(store).map((i) => i.id)).toEqual(['x']);
+    expect(store.pendingIds.size).toBe(0);
+    expectReported(errors);
+  });
+
+  it('puts back a delete whose op cannot be stored', async () => {
+    const { queue, store, errors } = brokenStorageStore({
+      list: vi.fn(() =>
+        Promise.resolve({ active: { Other: [item({ id: 'x', name: 'Bread' })] }, checked: [] }),
+      ),
+    });
+    await store.refresh();
+    vi.spyOn(queue, 'enqueue').mockRejectedValue(quota());
+
+    await store.remove('x');
+
+    expect(flat(store).map((i) => i.id)).toEqual(['x']);
+    expect(store.pendingIds.size).toBe(0);
+    expectReported(errors);
+  });
+
+  it('restores the whole basket when a clear cannot be stored', async () => {
+    const { queue, store, errors } = brokenStorageStore({
+      list: vi.fn(() =>
+        Promise.resolve({
+          active: {},
+          checked: [
+            item({ id: 'c1', name: 'Old', status: 'checked' }),
+            item({ id: 'c2', name: 'Older', status: 'checked' }),
+          ],
+        }),
+      ),
+    });
+    await store.refresh();
+    vi.spyOn(queue, 'enqueue').mockRejectedValue(quota());
+
+    await store.clearChecked();
+
+    expect(store.checked.map((i) => i.id)).toEqual(['c1', 'c2']);
+    expectReported(errors);
+  });
+});
+
+describe('bookkeeping after a successful request', () => {
+  it('is reported as a bug, never as "you are offline"', async () => {
+    // exec()'s try used to wrap the API call AND all the post-success local
+    // work, so anything thrown by the bookkeeping raised the offline banner
+    // immediately after a request that demonstrably succeeded.
+    const api = fakeApi({
+      // A malformed success payload: the request reached the server and worked,
+      // but reconciliation trips over the body.
+      addItem: vi.fn(() => Promise.resolve({ item: null as any, created: true })),
+    });
+    const queue = freshQueue();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const store = createStore({ api, queue, walkOrder: ['Other'] });
+      await store.add('Milk');
+
+      expect(store.online).toBe(true);
+      // The op is done server-side, so it must not sit in the queue for ever.
+      expect(await queue.pending()).toEqual([]);
+      expect(errors.mock.calls.some((c) => String(c[0]).startsWith('[trug]'))).toBe(true);
+    } finally {
+      errors.mockRestore();
+    }
   });
 });
 

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import uuid6
 
+from trug.categories import DEFAULT_WALK_ORDER, resolve_category
 from trug.icons import lookup as icon_lookup
 from trug.normalise import normalise, tidy_name
 
@@ -69,8 +70,12 @@ def _frecency(times_added: int, last_added: str, now: datetime) -> float:
 
 
 class Repository:
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, walk_order: list[str] | None = None):
         self.path = str(path)
+        # The household's configured aisles. Every category the repository
+        # writes — the built-in tier-0 map included — is resolved against this,
+        # so a config that omits an aisle never has it invented for it.
+        self.walk_order = list(walk_order) if walk_order else list(DEFAULT_WALK_ORDER)
         self._lock = threading.Lock()
         self._conn = self._connect()
         self._conn.executescript(_SCHEMA)
@@ -104,6 +109,79 @@ class Repository:
         self._collapse_duplicates()
         self._migrate_nut_icon()
         self._migrate_coconut_milk_icon()
+        self._migrate_builtin_map_refile()
+
+    def _builtin(self, name_norm: str) -> tuple[str, str] | None:
+        """Tier 0 for ``name_norm``: ``(icon_slug, category)`` or ``None``.
+
+        The map's category is resolved against the configured walk order, so a
+        household that does not stock an aisle gets ``Other`` — the same
+        fallback an unknown LLM-assigned category gets. Only the category is
+        gated; the icon is aisle-independent and always applies.
+        """
+        builtin = icon_lookup(name_norm)
+        if builtin is None:
+            return None
+        return builtin[0], resolve_category(builtin[1], self.walk_order)
+
+    def _migrate_builtin_map_refile(self) -> None:
+        """One-time backfill: re-file rows the built-in map can now place but
+        couldn't when they were added (the "Herbs & Spices" aisle landed after
+        Thyme, Cumin and friends were already sitting in ``Other``). Category and
+        icon are stamped once, at insert, and nothing re-runs the lookup.
+
+        Items are touched only when BOTH the stored category is the catch-all
+        (``Other``/NULL) AND no icon has ever been recorded — i.e. the row is
+        visibly unfiled, showing a monogram fallback. Any other category means a
+        human or the LLM put it there deliberately, and silently re-filing
+        someone's live list is not our call; an icon already present means
+        enrichment has had its say. That icon guard is also what stops a
+        boot-time re-run fighting the user: once re-filed the row carries an
+        icon, so dragging it back to ``Other`` afterwards makes it permanently
+        out of scope.
+
+        The catalogue is the part that makes it stick. ``add_item`` applies the
+        built-in map to a catalog row only ``WHERE icon IS NULL``, then copies
+        the catalog's icon/category onto the new item — so a name already
+        catalogued under the old aisle would keep landing there forever on every
+        re-add. Rewriting is scoped to names the built-in map knows, where tier 0
+        is authoritative and the stored value is only ever a stale copy of an
+        older map (or an LLM guess made before the map learned the name). Names
+        the map cannot place are left completely alone, so category knowledge the
+        LLM learned for them survives; no user-facing path writes catalog
+        icon/category, so nothing here can clobber a human choice.
+
+        Idempotent: the second run recomputes the same map values, finds the
+        items already carry an icon and the catalog rows already equal the map,
+        and writes nothing.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, name_norm FROM items "
+                "WHERE icon IS NULL AND (category IS NULL OR category = 'Other')"
+            ).fetchall()
+            for row in rows:
+                builtin = self._builtin(row["name_norm"])
+                if builtin is None:
+                    continue
+                self._conn.execute(
+                    "UPDATE items SET icon = ?, category = ? WHERE id = ?",
+                    (builtin[0], builtin[1], row["id"]),
+                )
+            catalog = self._conn.execute(
+                "SELECT name_norm, icon, category FROM catalog"
+            ).fetchall()
+            for row in catalog:
+                builtin = self._builtin(row["name_norm"])
+                if builtin is None:
+                    continue
+                if (row["icon"], row["category"]) == builtin:
+                    continue
+                self._conn.execute(
+                    "UPDATE catalog SET icon = ?, category = ? WHERE name_norm = ?",
+                    (builtin[0], builtin[1], row["name_norm"]),
+                )
+            self._conn.commit()
 
     def _migrate_nut_icon(self) -> None:
         """One-time backfill: rename the retired ``nut`` icon slug (a Tabler
@@ -286,7 +364,7 @@ class Repository:
             # Tier 0: apply the built-in icon map once, only when no icon has
             # been recorded yet (mirrors set_enrichment's WHERE icon IS NULL
             # guard so an LLM-supplied icon is never overwritten).
-            builtin = icon_lookup(name_norm)
+            builtin = self._builtin(name_norm)
             if builtin is not None:
                 self._conn.execute(
                     "UPDATE catalog SET icon = ?, category = ? "

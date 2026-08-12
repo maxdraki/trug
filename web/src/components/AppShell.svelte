@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { fly } from 'svelte/transition';
-  import { d, DUR } from '../lib/motion';
+  import { DUR, EASE, rise } from '../lib/motion';
   import { api, getToken, probeAuthStatus, ApiError } from '../lib/api';
   import { OpQueue } from '../lib/opqueue';
   import { createStore } from '../lib/store.svelte';
@@ -18,7 +17,14 @@
   import Icon from './Icon.svelte';
   import Logo from '../lib/Logo.svelte';
 
-  const store = createStore({ api, queue: new OpQueue('trug'), walkOrder: WALK_ORDER });
+  const store = createStore({
+    api,
+    queue: new OpQueue('trug'),
+    walkOrder: WALK_ORDER,
+    // A change that could not be saved has already been rolled back on the
+    // shelf; say so, through the same transient toast a refused drag uses.
+    onError: (message) => showError(message),
+  });
   const drag = createDragController({
     getGroups: () => store.groups,
     // Error sink for a rejected reorder: an ApiError (the server refused the
@@ -28,7 +34,7 @@
       try {
         await store.reorder(id, sortKey, category);
       } catch (err) {
-        if (err instanceof ApiError) showDragError();
+        if (err instanceof ApiError) showError("Couldn't move that — try again");
       }
     },
   });
@@ -47,13 +53,26 @@
   // the instance somewhere the passkey ceremony can run (secure context).
   let ownerless = $state(false);
 
-  // Transient toast for a rejected drag-reorder.
-  let dragError = $state<string | null>(null);
-  let dragErrorTimer: ReturnType<typeof setTimeout> | undefined;
-  function showDragError() {
-    dragError = "Couldn't move that — try again";
-    clearTimeout(dragErrorTimer);
-    dragErrorTimer = setTimeout(() => (dragError = null), 4000);
+  // Transient toast for a change the app could not carry out: a rejected
+  // drag-reorder, or a mutation whose op could not be saved to the offline
+  // queue (both have already been rolled back on the shelf by the time we get
+  // here, so the message says what state the list is now in).
+  let errorToast = $state<string | null>(null);
+  let errorToastTimer: ReturnType<typeof setTimeout> | undefined;
+  function showError(message: string) {
+    errorToast = message;
+    clearTimeout(errorToastTimer);
+    errorToastTimer = setTimeout(() => (errorToast = null), 4000);
+  }
+
+  /**
+   * A refresh/retry that failed. Offline is the ordinary case and is already on
+   * screen as the banner, and the store logs a server-side refusal itself — but
+   * an empty catch would leave a genuinely surprising failure (a bug in
+   * reconciliation, say) with nowhere to show at all.
+   */
+  function noteSyncFailure(err: unknown) {
+    console.debug('[trug] refresh/retry did not complete', err);
   }
 
   // "Copy list": the outstanding items, one name per line in shelf display
@@ -156,7 +175,7 @@
   );
 
   onMount(() => {
-    store.refresh().catch(() => {});
+    store.refresh().catch(noteSyncFailure);
 
     // Machine principal on a zero-user instance: surface the "no owner yet"
     // banner. Cookie (human) sessions are never in this state. Best-effort — a
@@ -165,7 +184,7 @@
       api.auth
         .bootstrapState()
         .then((s) => (ownerless = s.claimable))
-        .catch(() => {});
+        .catch((err) => console.debug('[trug] bootstrap-state probe failed', err));
     }
 
     // Ask the browser to keep the snapshot + op-queue from being evicted under
@@ -185,14 +204,19 @@
       window.addEventListener('resize', syncViewportHeight);
     }
 
-    // Live stream: apply deltas, and refetch on every (re)connect since the
-    // stream only carries changes made while we were connected.
+    // Live stream: apply deltas, and drain + refetch on every (re)connect since
+    // the stream only carries changes made while we were connected.
+    // A stream that has just (re)connected IS the "the server is back" signal —
+    // and it is the only one there is when the SERVER went away rather than the
+    // device's network, since `window.online` cannot fire for a network that
+    // never changed. So retry() here, not refresh(): refresh alone clears the
+    // banner and leaves the queue sitting there undrained.
     // The gate only mounts this shell once signed in, so the absence of a bearer
     // here means a cookie session — connect the stream cookie-authed.
     const disconnect = connectEvents(
       (name, data) => onEvent(name, data),
       getToken,
-      () => store.refresh().catch(() => {}),
+      () => store.retry().catch(noteSyncFailure),
       () => cookieAuth,
       {
         // After a sustained run of failed reconnects, confirm we're still signed
@@ -209,17 +233,33 @@
       },
     );
 
-    // Coming back to the tab may have missed events while hidden.
+    // Coming back to the tab may have missed events while hidden — and may also
+    // be the moment a phone that was asleep in a pocket regains service, so
+    // drain before refetching rather than after.
     const onVisible = () => {
-      if (document.visibilityState === 'visible') store.refresh().catch(() => {});
+      if (document.visibilityState === 'visible') store.retry().catch(noteSyncFailure);
     };
     // Regained network: flush queued ops, then refetch.
-    const onOnline = () => store.retry().catch(() => {});
+    const onOnline = () => store.retry().catch(noteSyncFailure);
 
     document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('online', onOnline);
 
+    // Last-resort recovery ticker. Every automatic drain above is EVENT-driven,
+    // and each event can be absent exactly when it is needed: `online` cannot
+    // fire when the device's network never changed (the server went away, not
+    // the wifi), the stream may be stuck on its backoff ladder, and a shopper
+    // walking the aisles never leaves or re-enters the tab. Without this, a
+    // queue that stopped draining stays stopped until someone taps something.
+    // It only runs while there is something to recover — offline, or ops still
+    // queued — so a healthy shelf makes no unprompted requests at all.
+    const RECOVERY_MS = 20_000;
+    const recovery = setInterval(() => {
+      if (!store.online || store.pendingIds.size > 0) store.retry().catch(noteSyncFailure);
+    }, RECOVERY_MS);
+
     return () => {
+      clearInterval(recovery);
       disconnect();
       store.dispose();
       document.removeEventListener('visibilitychange', onVisible);
@@ -234,7 +274,7 @@
       // teardown (and touch state on a torn-down component).
       if (ringBatchTimer) clearTimeout(ringBatchTimer);
       clearTimeout(ringToastTimer);
-      clearTimeout(dragErrorTimer);
+      clearTimeout(errorToastTimer);
       clearTimeout(copiedTimer);
       clearTimeout(copyToastTimer);
     };
@@ -278,7 +318,12 @@
   {/if}
 
   {#if offline}
-    <div class="offline-banner" role="status" transition:fly={{ y: -12, duration: d(DUR.fly) }}>
+    <div
+      class="offline-banner"
+      role="status"
+      in:rise={{ y: -12, duration: DUR.toastIn, easing: EASE.enter }}
+      out:rise={{ y: -12, duration: DUR.toastOut, easing: EASE.exit }}
+    >
       You're offline — changes are saved and will sync when you reconnect.
     </div>
   {/if}
@@ -302,8 +347,8 @@
     <Toast variant="accent">{ringToast}</Toast>
   {/if}
 
-  {#if dragError}
-    <Toast variant="neutral">{dragError}</Toast>
+  {#if errorToast}
+    <Toast variant="neutral">{errorToast}</Toast>
   {/if}
 
   {#if copyToast}
@@ -437,7 +482,7 @@
     flex: 1 1 auto;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
-    padding: 0 16px;
+    padding: 0 var(--app-gutter);
     /* Scroll anchoring fights the list's own animations. Checking an item, or
        re-adding one, changes the height of two containers at once; the browser
        then adjusts scrollTop to keep an anchor node still, which moves

@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { CatalogEntry } from '../lib/types';
-  import { sendItem, keyOf } from '../lib/motion';
   import { ICONS } from '../lib/icons';
   import Icon from './Icon.svelte';
 
@@ -68,7 +67,6 @@
             type="button"
             role="option"
             aria-selected="false"
-            out:sendItem={{ key: keyOf(s.display_name) }}
             onclick={() => commit(s.display_name)}
           >
             {#if s.icon && s.icon in ICONS}

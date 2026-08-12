@@ -36,6 +36,14 @@ export interface StoreDeps {
   queue: OpQueue;
   /** Category display order for the walk-order groups. */
   walkOrder: string[];
+  /**
+   * Sink for failures the shopper has to be told about, because the change they
+   * just made has been undone. Only storage faults reach here: a network
+   * failure is normal service (the op is durably queued and the offline banner
+   * explains it), but if the op could not be SAVED there is nothing left to
+   * sync and the shelf has silently rolled back under their thumb.
+   */
+  onError?: (message: string) => void;
 }
 
 export interface Store {
@@ -72,7 +80,7 @@ export interface Store {
  * correct if runes are ever swapped for plain reactive fields.
  */
 export function createStore(deps: StoreDeps): Store {
-  const { api, queue, walkOrder } = deps;
+  const { api, queue, walkOrder, onError } = deps;
 
   let active = $state<Item[]>([]);
   let checked = $state<Item[]>([]);
@@ -186,46 +194,118 @@ export function createStore(deps: StoreDeps): Store {
 
   // --- reconciliation ---
 
-  function reconcileAdd(optimisticId: string, returned: Item): void {
-    // Race: if a dedup swap occurs (returned.id !== optimisticId), any queued ops
-    // targeting the optimistic id will 404 when flushed and be dropped by design.
-    if (returned.id !== optimisticId) removeId(optimisticId);
+  /**
+   * The id of the row an `add` op actually put on screen. Usually the op's own
+   * fresh uuid, but when `add()` found a local match it rendered THAT row and
+   * marked its id pending, so the op carries the match's id alongside.
+   */
+  function localAddId(op: Op): string {
+    return op.pendingId ?? op.item!.id;
+  }
+
+  async function reconcileAdd(op: Op, returned: Item): Promise<void> {
+    const localId = localAddId(op);
+    const sentId = op.item!.id;
+    if (returned.id === localId) {
+      place(returned);
+      delPending(localId);
+      return;
+    }
+    if (sentId !== localId) {
+      // We rendered a LOCAL match and the server disagreed with it — folding
+      // onto a third row, or creating a fresh one. Reconciliation below copes,
+      // but the row we quietly moved on screen is one the server still has, so
+      // the shelf is briefly wrong until the next refresh. Not silent.
+      console.warn(
+        `[trug] add for "${op.item!.name}" did not resolve onto the row shown` +
+          ` (rendered ${localId}, sent ${sentId}, server returned ${returned.id})`,
+      );
+    }
+
+    // Dedup swap: the server folded this add onto a row we had never seen (its
+    // matching is broader than ours — plurals via the catalogue). Anything still
+    // queued against the optimistic id — the check-off made in the aisle, a
+    // delete — would name an item the server has never heard of, 404, and be
+    // dropped: the item you put in the trolley silently comes back unchecked.
+    // So repoint those ops at the id we were given. Ops already sent keep their
+    // 404 drop; only the stale ids are fixed.
+    //
+    // Repoint BEFORE migrating the visible state, so the outcome is known
+    // before anything is half-moved. The rewrite is IndexedDB work and can fail
+    // on its own terms (quota, private browsing, an aborted transaction) — that
+    // is a storage failure, not a network one, so it must not touch `online`:
+    // claiming "you're offline, changes will sync" would be wrong about the
+    // network AND wrong about the change having been saved. The add itself
+    // succeeded, so we swallow the error (the queue dequeues the add) and log.
+    let rewritten: Op[] = [];
+    try {
+      rewritten = await queue.rewriteItemId(localId, returned.id);
+    } catch (err) {
+      console.error(
+        `[trug] could not repoint queued ops from ${localId} to ${returned.id};` +
+          ' edits made offline against this item may be dropped on the next sync',
+        err,
+      );
+    }
+    // Migrate the view regardless. The server row is authoritative and is about
+    // to arrive over SSE: leaving the optimistic row in place would let that
+    // echo land as a SECOND copy of the same item, and strand the row at
+    // "queued" forever. A stale-but-single row is healed by the next refresh.
+    removeId(localId);
+    if (sentId !== localId) removeId(sentId);
     place(returned);
-    delPending(optimisticId);
+    delPending(localId);
+    delPending(sentId);
     delPending(returned.id);
+
+    if (rewritten.length === 0) return;
+    // Those ops have not flushed yet, so re-apply them over the server row (the
+    // check stays visibly ticked even if the network drops again here) and keep
+    // the id pending, which also suppresses the SSE echo of our own work.
+    const ids = new Set(pending);
+    for (const op of rewritten) applyOptimistic(op, ids);
+    pending = ids;
   }
 
   // --- op execution (used by every flush) ---
 
   async function exec(op: Op): Promise<void> {
+    // The `try` covers the REQUEST and nothing else. It used to wrap the local
+    // bookkeeping below as well, so a throw from reconciliation — a malformed
+    // payload, a bug in `place` — flipped `online` to false and raised "you're
+    // offline, changes will sync" immediately after a request that had
+    // demonstrably reached the server and succeeded.
+    let applyLocally: () => void | Promise<void> = () => {};
     try {
       switch (op.kind) {
         case 'add': {
           const { item } = await api.addItem(op.item!);
-          online = true;
-          reconcileAdd(op.item!.id, item);
+          applyLocally = () => reconcileAdd(op, item);
           break;
         }
         case 'check':
         case 'uncheck': {
           const item = await api.setStatus(op.itemId!, op.kind === 'check' ? 'checked' : 'active');
-          online = true;
-          place(item);
-          delPending(op.itemId!);
+          applyLocally = () => {
+            place(item);
+            delPending(op.itemId!);
+          };
           break;
         }
         case 'delete': {
           await api.remove(op.itemId!);
-          online = true;
-          removeId(op.itemId!);
-          delPending(op.itemId!);
+          applyLocally = () => {
+            removeId(op.itemId!);
+            delPending(op.itemId!);
+          };
           break;
         }
         case 'clear': {
           await api.clearChecked();
-          online = true;
-          checked = [];
-          schedulePersist();
+          applyLocally = () => {
+            checked = [];
+            schedulePersist();
+          };
           break;
         }
       }
@@ -234,12 +314,30 @@ export function createStore(deps: StoreDeps): Store {
         // 404/409 => the queue drops the op; release its pending marker too.
         if (err.status === 404 || err.status === 409) {
           if (op.itemId) delPending(op.itemId);
-          if (op.item) delPending(op.item.id);
+          if (op.item) {
+            delPending(op.item.id);
+            delPending(localAddId(op));
+          }
         }
       } else {
         online = false;
       }
       throw err;
+    }
+
+    online = true;
+    try {
+      await applyLocally();
+    } catch (err) {
+      // The server has already done the work, so the op is finished and must
+      // NOT be replayed: swallow, but never quietly. The shelf may now be out
+      // of step with the server until the next refresh — that is a bug to be
+      // read in the console, not an offline state to be shown as a banner.
+      console.error(
+        `[trug] ${op.kind} for item ${op.itemId ?? op.item?.id ?? '(none)'} succeeded, but` +
+          ' updating the local list failed; the shelf may be stale until the next refresh',
+        err,
+      );
     }
   }
 
@@ -256,6 +354,42 @@ export function createStore(deps: StoreDeps): Store {
       if (!online) return;
       const after = (await queue.pending()).length;
       if (after === 0 || after >= before) return;
+    }
+  }
+
+  /**
+   * The shared tail of every mutation: durably queue the op, then try to send
+   * it. The optimistic change is ALREADY on screen when this is called, so a
+   * rejected `enqueue` — quota, Safari private browsing, a blocked or corrupt
+   * database — has to undo it: otherwise the row sits there wearing a "queued"
+   * chip that is a lie (nothing is queued, nothing will ever be sent) and
+   * quietly disappears at the next refresh. `clearChecked` was the worst of
+   * these: the entire basket vanished locally with no `clear` op anywhere.
+   *
+   * Nothing is rethrown. Every caller is a UI event handler whose promise is
+   * floated (ListView's row taps, AppShell's add-bar), so throwing would only
+   * produce an unhandled rejection — the failure is handled here instead:
+   * rolled back, logged, and told to the shopper through `onError`.
+   */
+  async function commit(op: Op, rollback: () => void, message: string): Promise<void> {
+    try {
+      await queue.enqueue(op);
+    } catch (err) {
+      rollback();
+      console.error(
+        `[trug] could not save the ${op.kind} for item ${op.itemId ?? op.item?.id ?? '(none)'}` +
+          ' to the offline queue; the change has been undone',
+        err,
+      );
+      onError?.(message);
+      return;
+    }
+    try {
+      await drain();
+    } catch (err) {
+      // The op is safely stored, so this is only a failed *attempt* to send:
+      // the next drain (reconnect, SSE, the periodic retry) picks it up again.
+      console.error(`[trug] could not sync after ${op.kind}; it stays queued`, err);
     }
   }
 
@@ -292,14 +426,27 @@ export function createStore(deps: StoreDeps): Store {
       place(optimisticRow(id, display, note ?? null, new Date().toISOString()));
     }
     addPending(optimisticId);
+    // `pendingId` records which row is on screen for this op — see its doc on
+    // `Op` in types.ts. Stored with the op so a reload still knows.
     const op: Op = {
       opId: uuidv7(),
       kind: 'add',
       item: { id, name: display, ...(note != null ? { note } : {}) },
+      pendingId: optimisticId,
       ts: new Date().toISOString(),
     };
-    await queue.enqueue(op);
-    await drain();
+    await commit(
+      op,
+      () => {
+        // Undo exactly what was applied: a matched row goes back the way it
+        // was (struck through in the basket, if that is where it came from);
+        // a fabricated row goes away entirely.
+        if (existing) place(existing);
+        else removeId(id);
+        delPending(optimisticId);
+      },
+      `Couldn't save “${display}” — it hasn't been added`,
+    );
   }
 
   async function toggle(id: string): Promise<void> {
@@ -312,20 +459,36 @@ export function createStore(deps: StoreDeps): Store {
       checked_at: checking ? new Date().toISOString() : null,
     });
     addPending(id);
-    await queue.enqueue({
-      opId: uuidv7(),
-      kind: checking ? 'check' : 'uncheck',
-      itemId: id,
-      ts: new Date().toISOString(),
-    });
-    await drain();
+    await commit(
+      {
+        opId: uuidv7(),
+        kind: checking ? 'check' : 'uncheck',
+        itemId: id,
+        ts: new Date().toISOString(),
+      },
+      () => {
+        place(cur);
+        delPending(id);
+      },
+      `Couldn't save that — “${cur.name}” is back as it was`,
+    );
   }
 
   async function remove(id: string): Promise<void> {
+    // Captured for the rollback. Undefined only if the row has already gone
+    // (an SSE removal racing the tap); the delete is still queued either way,
+    // since the server may well still have the item.
+    const prev = find(id);
     removeId(id);
     addPending(id);
-    await queue.enqueue({ opId: uuidv7(), kind: 'delete', itemId: id, ts: new Date().toISOString() });
-    await drain();
+    await commit(
+      { opId: uuidv7(), kind: 'delete', itemId: id, ts: new Date().toISOString() },
+      () => {
+        if (prev) place(prev);
+        delPending(id);
+      },
+      `Couldn't save that — ${prev ? `“${prev.name}” is` : 'the item is'} still on the list`,
+    );
   }
 
   async function reorder(id: string, sortKey: number, category?: string): Promise<void> {
@@ -351,10 +514,17 @@ export function createStore(deps: StoreDeps): Store {
   }
 
   async function clearChecked(): Promise<void> {
+    const prev = checked;
     checked = [];
     schedulePersist();
-    await queue.enqueue({ opId: uuidv7(), kind: 'clear', ts: new Date().toISOString() });
-    await drain();
+    await commit(
+      { opId: uuidv7(), kind: 'clear', ts: new Date().toISOString() },
+      () => {
+        checked = prev;
+        schedulePersist();
+      },
+      "Couldn't clear the basket — nothing was cleared",
+    );
   }
 
   // --- refresh: server wins, then re-apply queued ops on top ---
@@ -362,7 +532,11 @@ export function createStore(deps: StoreDeps): Store {
   function applyOptimistic(op: Op, ids: Set<string>): void {
     switch (op.kind) {
       case 'add': {
-        const { id, name, note } = op.item!;
+        // Re-apply against the row this op put on screen, not the id it sends:
+        // when the op matched an existing row, that row is already here and
+        // fabricating a second one under the op's fresh uuid would duplicate it.
+        const id = localAddId(op);
+        const { name, note } = op.item!;
         if (!find(id)) place(optimisticRow(id, name, note ?? null, op.ts));
         ids.add(id);
         break;
@@ -401,7 +575,20 @@ export function createStore(deps: StoreDeps): Store {
       // offline: flip the flag so the banner shows on a cold offline boot, where
       // this failing refresh is the only network activity and navigator.onLine
       // can't always be trusted. The hydrated snapshot stays on screen.
-      if (!(err instanceof ApiError)) online = false;
+      if (err instanceof ApiError) {
+        // The server answered, and refused. `online` stays true — correctly, the
+        // network is fine — so NOTHING on screen changes: the shelf keeps
+        // showing a list that may be minutes or hours stale as though it were
+        // current. There is no honest UI for "the server is broken" here, but
+        // there must at least be a trace.
+        console.error(
+          `[trug] refresh failed: server answered ${err.status}.` +
+            ' The list on screen may be stale.',
+          err,
+        );
+      } else {
+        online = false;
+      }
       throw err;
     }
     online = true;
@@ -478,7 +665,19 @@ export function createStore(deps: StoreDeps): Store {
     const ids = new Set<string>(pending);
     for (const op of ops) applyOptimistic(op, ids);
     pending = ids;
-  })();
+  })().catch((err) => {
+    // Reading the queue failed at boot. The shelf still paints, from the
+    // snapshot — but a cold start after an offline shop now shows the PRE-shop
+    // list as though nothing had happened, with no "queued" chips. The ops are
+    // still on disk and a later drain will send them, so this is a display
+    // fault, not data loss; it is not something to shout at the shopper about
+    // mid-boot, but it must not be invisible either.
+    console.error(
+      '[trug] could not re-apply queued offline edits at boot;' +
+        ' the shelf may not show changes made while offline until they sync',
+      err,
+    );
+  });
 
   return {
     get groups() {

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { targetIndexHysteretic, rowGapShift, aisleReserve } from './drag.svelte';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { targetIndexHysteretic, rowGapShift, aisleReserve, createDragController } from './drag.svelte';
 
 /**
  * These cover the pure functions the drag controller shares between the live gap
@@ -166,5 +166,76 @@ describe('aisleReserve — cross-aisle space reservation', () => {
     const same = { originCategory: 'Drinks', targetCategory: 'Drinks' };
     expect(aisleReserve('Drinks', same, GAP)).toBe(0);
     expect(aisleReserve('Household', same, GAP)).toBe(0);
+  });
+});
+
+describe('createDragController — losing the pointer stream', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  /** A touch pointerdown on `el`, shaped as the controller reads it. */
+  function pointerDown(el: HTMLElement, pointerId: number): PointerEvent {
+    return {
+      pointerType: 'touch',
+      pointerId,
+      button: 0,
+      clientX: 0,
+      clientY: 0,
+      currentTarget: el,
+    } as unknown as PointerEvent;
+  }
+
+  /** A lifted drag, mid-flight: the row is up and following the pointer. */
+  function liftedDrag() {
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const item = { id: 'beer', name: 'Beer', category: 'Drinks' } as never;
+    const drag = createDragController({
+      getGroups: () => [{ category: 'Drinks', items: [item] }] as never,
+      reorder: () => Promise.resolve(),
+    });
+    drag.start(item, 'Drinks', pointerDown(el, 1), el);
+    vi.advanceTimersByTime(400); // past LONGPRESS_MS — the row lifts
+    return { drag, el };
+  }
+
+  it('lets go of a drag when the window loses focus', () => {
+    // cmd-tab, a system dialog, or a dev-server hot update mid-drag: neither
+    // pointerup nor pointercancel ever arrives. Without a release here the
+    // controller stays lifted forever, and `start()` refuses every later drag
+    // ("one drag at a time") — the list looks permanently un-draggable.
+    const { drag } = liftedDrag();
+    expect(drag.draggingId).toBe('beer');
+
+    window.dispatchEvent(new Event('blur'));
+    expect(drag.draggingId).toBeNull();
+  });
+
+  it('lets go of a drag when the page is hidden', () => {
+    // The phone version of the same loss: switching apps mid-drag fires
+    // visibilitychange, not blur.
+    const { drag } = liftedDrag();
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(drag.draggingId).toBeNull();
+    hidden.mockRestore();
+  });
+
+  it('holds on to a drag when the page becomes visible again', () => {
+    // visibilitychange also fires on the way back; that must not tear down a
+    // drag the user is still making.
+    const { drag } = liftedDrag();
+    document.dispatchEvent(new Event('visibilitychange')); // document.hidden === false
+    expect(drag.draggingId).toBe('beer');
+  });
+
+  it('accepts a fresh drag after the window lost focus mid-flight', () => {
+    const { drag, el } = liftedDrag();
+    window.dispatchEvent(new Event('blur'));
+
+    const item = { id: 'soda', name: 'Soda', category: 'Drinks' } as never;
+    drag.start(item, 'Drinks', pointerDown(el, 2), el);
+    vi.advanceTimersByTime(400);
+    expect(drag.draggingId).toBe('soda');
   });
 });

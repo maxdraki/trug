@@ -3,10 +3,9 @@ import { describe, it, expect, vi } from 'vitest';
 import ItemSheet from './ItemSheet.svelte';
 import type { Item } from '../lib/types';
 
-const WALK_ORDER = [
-  'Fruit & Veg', 'Bakery', 'Meat & Fish', 'Dairy & Eggs', 'Cupboard',
-  'Frozen', 'Drinks', 'Household', 'Pet', 'Other',
-];
+// The real list the app passes in, so the picker can never quietly offer a
+// stale set of aisles.
+import { WALK_ORDER } from '../lib/walkOrder';
 
 function item(partial: Partial<Item> & { id: string; name: string }): Item {
   return {
@@ -40,5 +39,19 @@ describe('ItemSheet', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(onSave).toHaveBeenCalledWith('x', { note: null, category: 'Pet' });
+  });
+
+  it('offers every aisle in the walk order, including Herbs & Spices', async () => {
+    render(ItemSheet, {
+      item: item({ id: 'x', name: 'Oregano', category: 'Other' }),
+      walkOrder: WALK_ORDER,
+      onSave: vi.fn(() => Promise.resolve()),
+      onRemove: vi.fn(),
+      onClose: vi.fn(),
+    });
+
+    const select = screen.getByLabelText('Category') as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(WALK_ORDER);
+    expect(WALK_ORDER).toContain('Herbs & Spices');
   });
 });

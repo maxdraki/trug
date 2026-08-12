@@ -124,3 +124,26 @@ describe('AisleGroup drag displacement + cleanup', () => {
     expect(sodaRow.style.opacity).toBe('');
   });
 });
+
+describe('AisleGroup shelf label', () => {
+  it('shows how many items are on the shelf', () => {
+    const { container } = render(AisleGroup, props(controller({})));
+    expect(container.querySelector('h2 .count')!.textContent).toBe('2');
+  });
+
+  it('counts the items it was given, not a fixed number', () => {
+    // Rendered fresh rather than re-rendered: dropping a row fires the FLIP
+    // animation, and jsdom has no element.getAnimations to service it.
+    const { container } = render(AisleGroup, { ...props(controller({})), items: [beer] });
+    expect(container.querySelector('h2 .count')!.textContent).toBe('1');
+  });
+
+  it('announces the count as part of the shelf heading', () => {
+    // "Dairy & Eggs, 2" tells someone navigating by heading how much is on the
+    // shelf before they enter it — the same reading the basket heading gives.
+    // Both counts are announced or neither; they must not disagree.
+    const { container } = render(AisleGroup, props(controller({})));
+    expect(container.querySelector('h2 .count')!.getAttribute('aria-hidden')).toBeNull();
+    expect(container.querySelector('h2')!.textContent!.replace(/\s+/g, ' ')).toContain('Drinks 2');
+  });
+});

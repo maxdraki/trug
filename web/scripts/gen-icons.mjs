@@ -36,7 +36,11 @@ const UI_SLUGS = [
   // Settings disclosures: rotating chevron on each collapsible section header.
   'chevron-right',
   // Aisle shelf-label icons (CATEGORY_ICON) not already in the vocabulary.
-  'packages',
+  'archive',
+  'glass-full',
+  'leaf-2',
+  // Right-swipe reveal: the gesture checks the item off, so it shows a tick.
+  'check',
   'shopping-bag',
   'clock',
 ];

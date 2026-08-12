@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
+### Added
+
+- **A Herbs & Spices aisle**, between Cupboard and Frozen. Oregano, thyme, cumin, sage, dill,
+  chives and tarragon all used to land in "Other" — the catch-all telling you the map had no
+  home for them. Works with no LLM key, from the built-in map alone. A one-off migration re-files
+  what it can now place, but only rows sitting in "Other" with no icon: anything filed elsewhere
+  was put there by a person and is not ours to move.
+- **A density you can choose**, in Settings beside Theme and Accent. Dense fits about fifteen
+  rows a screen where comfortable fits eleven — one glance instead of two, halfway down an aisle.
+  It's per device, so your phone and someone else's can differ.
+- **Counts on each shelf label**, following the items still to get, so they tick down as you shop.
+- **The basket is a drawer**, closed by default. By the end of a shop the done pile is most of the
+  list, and a section that starts empty and swells to four-fifths of the screen pushes the handful
+  of things you still need off the bottom — which is the one thing this list must never do.
+
+### Changed
+
+- **The list runs edge to edge**, with sticky shelf labels carrying the grouping the card edges
+  used to. Labels now sit on the same left edge as the item chips.
+- **The "frequently added" tray is text pills** instead of fixed-width tiles, which ellipsised to
+  "Smoked S…" — the one thing a shortcut must never do. Capped at two measured rows, with the rest
+  behind a counter.
+- **Motion is quieter and closer to your thumb.** The check-off used to fly the row across the
+  whole viewport into the basket: 2373px in 300ms, which is about seven times faster than the eye
+  can track, so it read as a smear that left the screen 50ms in and passed behind every shelf
+  label on the way. It's gone. The strike-through now draws across the name in 150ms, the row
+  collapses where it stands, and nothing in the app runs longer than 400ms — spent once a shop, on
+  clearing the basket. Reduced motion now substitutes rather than strips: travel goes, colour and
+  opacity still move.
+- Checking an item off used to destroy the row on the same tick, so its own confirmation never
+  played. The row now stays put for the length of the strike before it leaves.
+
+### Fixed
+
+- **A hung request could wedge the app offline forever.** No request had a timeout, and the queue
+  reuses one in-flight promise — so a request that hangs rather than fails (a restarted server
+  behind a proxy, a captive portal, a backgrounded PWA) parked the queue permanently. The app kept
+  accepting check-offs, the counter climbed, nothing was ever sent, and only a reload recovered it.
+  Requests now time out, and the sync stream reconnecting drains the queue instead of just clearing
+  the banner.
+- **Edits could vanish if storage failed.** Every change was applied to the screen and then written
+  to the offline queue with nobody checking the write. If IndexedDB faulted — quota, private
+  browsing, an evicted database — the item sat on your shelf, was never queued, and disappeared at
+  the next refresh. Add five things in the car park, arrive with an empty list. Failures now roll
+  back and say so.
+- **An offline check-off could be silently dropped** when the server recognised the item as one you
+  already had: queued changes named a row id the server had replaced, 404'd, and were discarded.
+- **A drag could leave the list un-draggable.** If the pointer stream ended without a release —
+  switching apps mid-drag, a system dialog — the controller stayed armed and refused every later
+  drag until a reload.
+- **"Lemons" then "Lemon" made two rows** (the reverse order worked). The singular/plural fold is
+  now symmetric, and an exact match always wins — which also stops a stray "asparagu" mangling
+  "asparagus".
+- Several items were filed by the wrong word: "vanilla yogurt" and "herbal tea" as spices,
+  "spiced rum" away from Drinks, "cinnamon swirl" away from Bakery.
+- Two rapid check-offs could swap the rows under your thumb.
+- An item with a note is no longer taller than one without, so the list keeps an even rhythm.
+
 ## [0.2.2] - 2026-08-10
 
 ### Added

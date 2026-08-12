@@ -8,11 +8,14 @@
 export const CATEGORY_ICON: Record<string, string> = {
   'Fruit & Veg': 'carrot',
   Bakery: 'baguette',
-  'Meat & Fish': 'fish',
+  'Meat & Fish': 'meat',
   'Dairy & Eggs': 'egg',
-  Cupboard: 'packages',
+  Cupboard: 'archive',
+  // A herb sprig, not the `leaf` used by the produce rows, so the shelf label
+  // stays distinct from the items sitting under it.
+  'Herbs & Spices': 'leaf-2',
   Frozen: 'snowflake',
-  Drinks: 'bottle',
+  Drinks: 'glass-full',
   Household: 'spray',
   Pet: 'paw',
   Other: 'shopping-bag',
@@ -24,6 +27,7 @@ export const WALK_ORDER: string[] = [
   'Meat & Fish',
   'Dairy & Eggs',
   'Cupboard',
+  'Herbs & Spices',
   'Frozen',
   'Drinks',
   'Household',
