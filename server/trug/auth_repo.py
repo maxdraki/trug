@@ -115,7 +115,32 @@ class AuthRepository:
         # switching journal mode — so a diagnosis never creates or mutates the
         # file (e.g. leaving a root-owned DB the server then can't open).
         self.read_only = read_only
-        self._lock = threading.Lock()
+        # CONNECTION-ACCESS lock, not a write lock. THE RULE: every use of
+        # ``self._conn`` — reads included — happens while holding this, and rows
+        # are fully materialised (``.fetchone()``/``.fetchall()``) before it is
+        # released.
+        #
+        # Why reads too: a sqlite3 connection caches prepared statements keyed by
+        # SQL TEXT, so two threads running the SAME query string share one
+        # underlying ``sqlite3_stmt``. One rebinds and resets it while the other
+        # is stepping it — which returned complete rows belonging to the WRONG
+        # user (a session lookup authenticating as another member), reported live
+        # sessions and invites as invalid, and raised InterfaceError/TypeError.
+        # The connection is opened ``check_same_thread=False``, so nothing else
+        # serialises this.
+        #
+        # RLock, not Lock, deliberately: the rule above means a method that
+        # already holds the lock and calls another public method would deadlock
+        # under a plain Lock — and a deadlock here wedges every authenticated
+        # request, since get_active_session runs on all of them. A hung server is
+        # a far worse failure than the thing a plain Lock buys (loudly catching
+        # accidental nesting). Re-entering is safe: no other thread can interleave
+        # while this one owns the lock. The one thing to watch when nesting is
+        # that an inner method's ``commit()`` ends the outer method's
+        # transaction — so a multi-statement atomic unit (see claim_first_user)
+        # must inline its SQL or call a non-committing private ``_`` helper
+        # (see _cascade_delete_user) rather than a public method.
+        self._lock = threading.RLock()
         self._conn = self._connect()
         if read_only:
             return
@@ -135,8 +160,8 @@ class AuthRepository:
 
     def _migrate(self) -> None:
         """In-place schema upgrades for DBs created before a column existed:
-        ``invite_token_hash`` on challenges (so consume_invite can invalidate the
-        challenges minted against an invite it just consumed) and
+        ``invite_token_hash`` on challenges (so redeeming an invite can invalidate
+        the challenges minted against it) and
         ``forwarded_header_seen_at`` on meta (the proxy-detection signal)."""
         with self._lock:
             cols = {
@@ -178,7 +203,8 @@ class AuthRepository:
     def journal_mode(self) -> str:
         """The current SQLite journal mode (``"wal"`` on a normally-opened repo).
         Kept in the repository layer so the doctor never touches sqlite3 itself."""
-        return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        with self._lock:
+            return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
 
     # --- users ---------------------------------------------------------
 
@@ -201,26 +227,29 @@ class AuthRepository:
     def user_count(self) -> int:
         """Total users on the roster (pending + enrolled). Zero means the
         instance is unclaimed and the bootstrap flow is open."""
-        return self._conn.execute(
-            "SELECT COUNT(*) AS n FROM users"
-        ).fetchone()["n"]
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) AS n FROM users"
+            ).fetchone()["n"]
 
     def enrolled_count(self) -> int:
         """Users with at least one credential — the ones who can actually sign in."""
-        return self._conn.execute(
-            "SELECT COUNT(DISTINCT c.user_id) AS n FROM credentials c"
-        ).fetchone()["n"]
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(DISTINCT c.user_id) AS n FROM credentials c"
+            ).fetchone()["n"]
 
     def list_users(self) -> list[dict]:
         """The roster for the Members UI: each user's name, whether they are
         enrolled (≥1 credential), when they were created, and the credential
         count. Ordered oldest-first so the household reads stably."""
-        rows = self._conn.execute(
-            "SELECT u.name AS name, u.created_at AS created_at, "
-            "COUNT(c.id) AS credential_count "
-            "FROM users u LEFT JOIN credentials c ON c.user_id = u.id "
-            "GROUP BY u.id ORDER BY u.created_at ASC"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT u.name AS name, u.created_at AS created_at, "
+                "COUNT(c.id) AS credential_count "
+                "FROM users u LEFT JOIN credentials c ON c.user_id = u.id "
+                "GROUP BY u.id ORDER BY u.created_at ASC"
+            ).fetchall()
         return [
             {
                 "name": r["name"],
@@ -420,15 +449,17 @@ class AuthRepository:
             return "ok"
 
     def get_user_by_name(self, name: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM users WHERE name = ?", (name,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE name = ?", (name,)
+            ).fetchone()
         return dict(row) if row is not None else None
 
     def get_user(self, user_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM users WHERE id = ?", (user_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
         return dict(row) if row is not None else None
 
     # --- credentials ---------------------------------------------------
@@ -459,15 +490,18 @@ class AuthRepository:
             self._conn.commit()
 
     def get_credential(self, credential_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM credentials WHERE credential_id = ?", (credential_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM credentials WHERE credential_id = ?",
+                (credential_id,),
+            ).fetchone()
         return dict(row) if row is not None else None
 
     def credentials_for_user(self, user_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT * FROM credentials WHERE user_id = ?", (user_id,)
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM credentials WHERE user_id = ?", (user_id,)
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def update_sign_count(self, credential_id: str, new_count: int) -> None:
@@ -489,7 +523,7 @@ class AuthRepository:
         invite_token_hash: str | None = None,
     ) -> None:
         """``invite_token_hash``, when given, ties this challenge to an
-        invite so consume_invite can invalidate it as a side effect of
+        invite so redemption can invalidate it as a side effect of
         redemption (closing the window where an outstanding registration
         challenge survives its invite being used up elsewhere)."""
         expires = _now() + timedelta(seconds=ttl_seconds)
@@ -539,38 +573,95 @@ class AuthRepository:
 
     def get_valid_invite(self, token_hash: str) -> dict | None:
         """Return the invite iff it exists, is unused, and is unexpired."""
-        row = self._conn.execute(
-            "SELECT * FROM invites WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM invites WHERE token_hash = ?", (token_hash,)
+            ).fetchone()
         if row is None or row["used_at"] is not None:
             return None
         if _parse(row["expires_at"]) < _now():
             return None
         return dict(row)
 
-    def consume_invite(self, token_hash: str) -> bool:
-        """Atomically mark an invite used. Returns True only for the caller
-        that actually flips it (a plain UPDATE ... WHERE used_at IS NULL,
-        checked via rowcount) so two racing redemptions can't both succeed.
-        Also invalidates any still-unused challenges minted against this
-        invite, so a stale register/options challenge from a losing race
-        can't be replayed after the fact."""
+    # NOTE: there is deliberately no bare ``consume_invite``. Spending an invite
+    # without writing the passkey in the same transaction is exactly the lockout
+    # bug — see redeem_invite_with_credential below.
+
+    def _invalidate_invite_challenges(self, token_hash: str, now: str) -> None:
+        """Kill any still-unused challenges minted against this invite. Assumes
+        the caller already holds ``self._lock`` and will commit."""
+        self._conn.execute(
+            "UPDATE challenges SET used_at = ? "
+            "WHERE invite_token_hash = ? AND used_at IS NULL",
+            (now, token_hash),
+        )
+
+    def redeem_invite_with_credential(
+        self,
+        token_hash: str,
+        credential_id: str,
+        public_key: bytes,
+        sign_count: int,
+        transports: str | None,
+    ) -> bool:
+        """Spend an invite and enrol its passkey as ONE atomic unit. Under the
+        connection lock, in a single transaction: flip ``used_at`` (only for the
+        caller that actually wins it), invalidate the challenges minted against
+        the invite, and insert the credential — one commit for all three.
+        Returns False, having written nothing, when the invite was already spent.
+
+        Atomicity is the whole point: the old two-step flow (consume the invite,
+        commit; then add the credential in a separate txn) could burn the invite
+        with NO credential written if anything intervened — a crash, an OOM kill,
+        a container restart. The invitee is then locked out holding a spent
+        invite and no passkey, and when they were the household's route back in
+        (the last enrolled member re-enrolling, or the second member of a
+        one-member instance) only ``trug-doctor recover --reset-bootstrap`` gets
+        them back. Here nothing is committed until the credential lands; any
+        failure rolls the lot back, so the invite is either fully redeemed or
+        still redeemable — never spent-but-useless.
+
+        The two-tab race guarantee is unchanged: the same ``WHERE used_at IS
+        NULL`` still picks exactly one winner, and the loser gets False."""
         with self._lock:
             now = _iso(_now())
-            cur = self._conn.execute(
-                "UPDATE invites SET used_at = ? "
-                "WHERE token_hash = ? AND used_at IS NULL",
-                (now, token_hash),
-            )
-            consumed = cur.rowcount > 0
-            if consumed:
-                self._conn.execute(
-                    "UPDATE challenges SET used_at = ? "
-                    "WHERE invite_token_hash = ? AND used_at IS NULL",
+            try:
+                cur = self._conn.execute(
+                    "UPDATE invites SET used_at = ? "
+                    "WHERE token_hash = ? AND used_at IS NULL",
                     (now, token_hash),
                 )
-            self._conn.commit()
-            return consumed
+                if cur.rowcount == 0:
+                    # Lost the race (or the invite never existed): undo the
+                    # no-op UPDATE's open transaction and write nothing.
+                    self._conn.rollback()
+                    return False
+                user_id = self._conn.execute(
+                    "SELECT user_id FROM invites WHERE token_hash = ?",
+                    (token_hash,),
+                ).fetchone()["user_id"]
+                self._invalidate_invite_challenges(token_hash, now)
+                self._conn.execute(
+                    "INSERT INTO credentials "
+                    "(id, user_id, credential_id, public_key, sign_count, "
+                    "transports, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        str(uuid6.uuid7()),
+                        user_id,
+                        credential_id,
+                        public_key,
+                        sign_count,
+                        transports,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                # Roll the redemption back so the invite is not left spent with
+                # no passkey behind it — that is the lockout.
+                self._conn.rollback()
+                raise
+            return True
 
     # --- sessions ------------------------------------------------------
 
@@ -604,11 +695,12 @@ class AuthRepository:
 
     def get_active_session(self, token_hash: str) -> dict | None:
         """Return an active (unrevoked, unexpired) session with its user name."""
-        row = self._conn.execute(
-            "SELECT s.*, u.name AS user_name FROM sessions s "
-            "JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
-            (token_hash,),
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT s.*, u.name AS user_name FROM sessions s "
+                "JOIN users u ON u.id = s.user_id WHERE s.token_hash = ?",
+                (token_hash,),
+            ).fetchone()
         if row is None or row["revoked"]:
             return None
         if _parse(row["expires_at"]) < _now():
@@ -637,12 +729,13 @@ class AuthRepository:
             self._conn.commit()
 
     def sessions_for_user(self, user_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT id, created_at, last_seen, user_agent, revoked "
-            "FROM sessions WHERE user_id = ? AND revoked = 0 "
-            "ORDER BY created_at DESC",
-            (user_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, created_at, last_seen, user_agent, revoked "
+                "FROM sessions WHERE user_id = ? AND revoked = 0 "
+                "ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     def revoke_session(self, session_id: str, user_id: str) -> bool:
@@ -671,21 +764,23 @@ class AuthRepository:
         """Unrevoked, unexpired sessions — the 'active sessions' the roster line
         reports."""
         now = _iso(_now())
-        return self._conn.execute(
-            "SELECT COUNT(*) AS n FROM sessions "
-            "WHERE revoked = 0 AND expires_at > ?",
-            (now,),
-        ).fetchone()["n"]
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) AS n FROM sessions "
+                "WHERE revoked = 0 AND expires_at > ?",
+                (now,),
+            ).fetchone()["n"]
 
     def outstanding_invites(self) -> int:
         """Unused, unexpired invites still redeemable — reported so a lockout
         diagnosis knows a way back in may already be in someone's inbox."""
         now = _iso(_now())
-        return self._conn.execute(
-            "SELECT COUNT(*) AS n FROM invites "
-            "WHERE used_at IS NULL AND expires_at > ?",
-            (now,),
-        ).fetchone()["n"]
+        with self._lock:
+            return self._conn.execute(
+                "SELECT COUNT(*) AS n FROM invites "
+                "WHERE used_at IS NULL AND expires_at > ?",
+                (now,),
+            ).fetchone()["n"]
 
     # --- bootstrap reopen (recovery) -----------------------------------
 
@@ -709,9 +804,10 @@ class AuthRepository:
 
     def bootstrap_reopen_active(self) -> bool:
         """True while a recover --reset-bootstrap reopen is live and unclaimed."""
-        row = self._conn.execute(
-            "SELECT bootstrap_reopened_at FROM meta WHERE id = 1"
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT bootstrap_reopened_at FROM meta WHERE id = 1"
+            ).fetchone()
         return row is not None and row["bootstrap_reopened_at"] is not None
 
     # --- proxy-detection signal (rate-limiter trust diagnostics) -------
@@ -750,9 +846,10 @@ class AuthRepository:
         record_host/mark_forwarded_header_seen) and report 'not seen' rather than
         crash the whole diagnosis, keeping sqlite3 out of the doctor layer."""
         try:
-            row = self._conn.execute(
-                "SELECT forwarded_header_seen_at FROM meta WHERE id = 1"
-            ).fetchone()
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT forwarded_header_seen_at FROM meta WHERE id = 1"
+                ).fetchone()
         except sqlite3.OperationalError:
             return False
         return row is not None and row["forwarded_header_seen_at"] is not None
@@ -792,8 +889,9 @@ class AuthRepository:
     def observed_hosts(self) -> list[dict]:
         """The observed hosts, most-recently-seen first: each ``{host,
         hit_count, last_seen}``."""
-        rows = self._conn.execute(
-            "SELECT host, hit_count, last_seen FROM observed_hosts "
-            "ORDER BY last_seen DESC"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT host, hit_count, last_seen FROM observed_hosts "
+                "ORDER BY last_seen DESC"
+            ).fetchall()
         return [dict(row) for row in rows]

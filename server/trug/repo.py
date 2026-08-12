@@ -76,7 +76,19 @@ class Repository:
         # writes — the built-in tier-0 map included — is resolved against this,
         # so a config that omits an aisle never has it invented for it.
         self.walk_order = list(walk_order) if walk_order else list(DEFAULT_WALK_ORDER)
-        self._lock = threading.Lock()
+        # CONNECTION-ACCESS lock, not a write lock. THE RULE: every use of
+        # ``self._conn`` — reads included — happens while holding this, and rows
+        # are fully materialised (``.fetchone()``/``.fetchall()``) before it is
+        # released. A sqlite3 connection caches prepared statements keyed by SQL
+        # TEXT, so two threads running the SAME query string share one underlying
+        # ``sqlite3_stmt``: one rebinds and resets it while the other steps it,
+        # yielding torn or outright wrong rows (and InterfaceError/TypeError).
+        # The connection is opened ``check_same_thread=False``, so nothing else
+        # serialises this. Reentrant so that a locked method calling another
+        # locked one cannot deadlock the server; the cost is that an inner
+        # ``commit()`` ends the outer transaction, so multi-statement atomic
+        # units call non-committing private ``_`` helpers (see _bump_catalog).
+        self._lock = threading.RLock()
         self._conn = self._connect()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -393,6 +405,9 @@ class Repository:
             return self._row_to_item(row), True
 
     def _bump_catalog(self, name_norm: str, display_name: str) -> None:
+        """Assumes the caller already holds ``self._lock`` and will commit —
+        deliberately not a locked/committing method of its own so it can be part
+        of a caller's larger atomic unit (see add_item)."""
         now = _now()
         self._conn.execute(
             "INSERT INTO catalog "
@@ -404,9 +419,10 @@ class Repository:
         )
 
     def get_item(self, item_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM items WHERE id = ?", (item_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
         return self._row_to_item(row) if row is not None else None
 
     def set_status(self, item_id: str, status: str) -> dict | None:
@@ -453,9 +469,10 @@ class Repository:
             return cur.rowcount
 
     def list_items(self) -> dict:
-        rows = self._conn.execute(
-            "SELECT * FROM items ORDER BY sort_key, created_at, id"
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM items ORDER BY sort_key, created_at, id"
+            ).fetchall()
         result: dict = {"active": [], "checked": []}
         for row in rows:
             item = self._row_to_item(row)
@@ -466,13 +483,15 @@ class Repository:
     # --- catalog -------------------------------------------------------
 
     def known_norms(self) -> set[str]:
-        rows = self._conn.execute("SELECT name_norm FROM catalog").fetchall()
+        with self._lock:
+            rows = self._conn.execute("SELECT name_norm FROM catalog").fetchall()
         return {row["name_norm"] for row in rows}
 
     def catalog_entry(self, name_norm: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM catalog WHERE name_norm = ?", (name_norm,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM catalog WHERE name_norm = ?", (name_norm,)
+            ).fetchone()
         return dict(row) if row is not None else None
 
     def _rank(self, rows) -> list[dict]:
@@ -485,16 +504,18 @@ class Repository:
         return ranked
 
     def catalog_top(self, n: int = 24) -> list[dict]:
-        rows = self._conn.execute("SELECT * FROM catalog").fetchall()
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM catalog").fetchall()
         return self._rank(rows)[:n]
 
     def catalog_search(self, q: str, limit: int = 8) -> list[dict]:
         pattern = f"%{q}%"
-        rows = self._conn.execute(
-            "SELECT * FROM catalog "
-            "WHERE name_norm LIKE ? OR display_name LIKE ?",
-            (pattern, pattern),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM catalog "
+                "WHERE name_norm LIKE ? OR display_name LIKE ?",
+                (pattern, pattern),
+            ).fetchall()
         now = datetime.now(timezone.utc)
         prefix = q.lower()
 

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.0] - 2026-08-12
 
+### Security
+
+- **A shared database connection could authenticate you as another member of your household.**
+  Each repository used one SQLite connection behind a lock that only writers took, and a
+  connection caches prepared statements by SQL text — so two threads running the same query at
+  once shared one statement, and one rebound it while the other was reading. Measured over 60,000
+  concurrent session lookups on a WAL database: 846 valid sessions reported invalid, 448 crashes
+  or garbled rows, and 583 that returned a complete, coherent row belonging to the *other* person.
+  On the registration path it could enrol a passkey against the wrong member. Every use of the
+  connection now holds the lock. Writes always did, so an invite could never be double-consumed.
+- **A crash mid-registration could lock out the person you invited.** Spending the invite and
+  writing their passkey were two separate commits; a restart in between burned the invite with no
+  credential stored. They are now one transaction, so a failure leaves the invite redeemable.
+
 ### Added
 
 - **A Herbs & Spices aisle**, between Cupboard and Frozen. Oregano, thyme, cumin, sage, dill,

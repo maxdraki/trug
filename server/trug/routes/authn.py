@@ -439,24 +439,31 @@ def register_verify(
         )
         raise HTTPException(status_code=400, detail="Passkey verification failed") from exc
 
-    # Redeem the invite atomically before persisting anything: consume_invite
-    # only returns True for the single caller that actually flips
-    # used_at from NULL. Two verifies racing on the same invite (e.g. two
-    # tabs, or a replayed request) can both reach this point after
-    # passing get_valid_invite and verifying their own credential, but
-    # only one may claim the invite — the loser must not add a
-    # credential or start a session.
-    if not auth_repo.consume_invite(token_hash):
-        raise HTTPException(status_code=410, detail="Invite already used")
-
+    # Spend the invite and write the passkey as ONE transaction. It only
+    # returns True for the single caller that actually flips used_at from
+    # NULL: two verifies racing on the same invite (two tabs, or a replayed
+    # request) can both reach this point after passing get_valid_invite and
+    # verifying their own credential, but only one may claim it — the loser
+    # gets False and must not add a credential or start a session.
+    #
+    # Atomic because the two used to be separate commits: anything intervening
+    # (crash, OOM kill, container restart) burned the invite with no credential
+    # written, locking the invitee out of a household that might have no other
+    # way back in. Now it is all-or-nothing, so a failure leaves the same invite
+    # still redeemable.
     transports = body.credential.get("transports")
-    auth_repo.add_credential(
-        invite["user_id"],
+    if not auth_repo.redeem_invite_with_credential(
+        token_hash,
         bytes_to_base64url(verified.credential_id),
         verified.credential_public_key,
         verified.sign_count,
         ",".join(transports) if transports else None,
-    )
+    ):
+        raise HTTPException(status_code=410, detail="Invite already used")
+
+    # Deliberately outside that transaction: a failure to start the session
+    # costs the invitee a sign-in, not their enrolment — and folding a
+    # cookie-writing side effect into a DB transaction buys nothing.
     _start_session(request, response, invite["user_id"])
     user = auth_repo.get_user(invite["user_id"])
     return {"ok": True, "user": user["name"]}

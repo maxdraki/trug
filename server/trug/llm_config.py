@@ -61,7 +61,17 @@ class LLMConfigStore:
         self.path = str(path)
         # A non-empty secret enables at-rest encryption of the api key.
         self._fernet = _fernet_for(secret) if secret else None
-        self._lock = threading.Lock()
+        # CONNECTION-ACCESS lock, not a write lock. THE RULE: every use of
+        # ``self._conn`` — reads included — happens while holding this, and rows
+        # are fully materialised (``.fetchone()``) before it is released. A
+        # sqlite3 connection caches prepared statements keyed by SQL TEXT, so two
+        # threads running the SAME query string share one underlying
+        # ``sqlite3_stmt``: one rebinds and resets it while the other steps it,
+        # yielding torn rows or InterfaceError. The connection is opened
+        # ``check_same_thread=False``, so nothing else serialises this. Reentrant
+        # so a locked method calling another locked one cannot deadlock; the cost
+        # is that an inner ``commit()`` ends the outer transaction.
+        self._lock = threading.RLock()
         self._conn = self._connect()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -113,10 +123,11 @@ class LLMConfigStore:
         The returned ``api_key`` is the real key for server-side client
         building — callers must never hand it back to a client.
         """
-        row = self._conn.execute(
-            "SELECT provider, api_key, encrypted, model, base_url, updated_at "
-            "FROM llm_config WHERE id = 1"
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT provider, api_key, encrypted, model, base_url, updated_at "
+                "FROM llm_config WHERE id = 1"
+            ).fetchone()
         if row is None:
             return None
         api_key = self._decrypt(row["api_key"], row["encrypted"])
