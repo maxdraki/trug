@@ -100,6 +100,11 @@ credentials to the RP ID, so if they disagree every passkey ceremony fails — n
 nothing in the UI, and a perfectly healthy healthcheck. It is the most common way a Trug deployment
 ends up broken, and from the outside it looks fine.
 
+That hostname also has to be HTTPS. Browsers only create a passkey in a secure context and an RP ID
+can't be an IP address, so an instance reachable only at `http://<ip>:<port>` serves the list fine
+and can never enrol an account. If you can't hand out a TLS hostname, Trug isn't hostable on your
+platform in any useful sense.
+
 If your platform assigns the hostname, inject it: `TRUG_ORIGIN=https://<assigned-host>` and
 `TRUG_RP_ID=<assigned-host>` at deploy time removes the whole failure class. If the user later adds
 a custom domain, both need updating and existing passkeys re-enrolling — credentials are bound to

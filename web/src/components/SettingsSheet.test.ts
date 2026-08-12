@@ -5,6 +5,7 @@ import SettingsSheet from './SettingsSheet.svelte';
 // The sheet drives theming through applyTheme and token re-entry through setToken;
 // mock both so the test asserts the calls without touching real storage/DOM state.
 const applyTheme = vi.fn();
+const applyDensity = vi.fn();
 const inviteUser = vi.fn();
 const listMembers = vi.fn();
 const removeMember = vi.fn();
@@ -17,7 +18,10 @@ const putLlmConfig = vi.fn();
 const testLlmConfig = vi.fn();
 const clearLlmConfig = vi.fn();
 const listLlmModels = vi.fn();
-vi.mock('../lib/theme', () => ({ applyTheme: (...a: unknown[]) => applyTheme(...a) }));
+vi.mock('../lib/theme', () => ({
+  applyTheme: (...a: unknown[]) => applyTheme(...a),
+  applyDensity: (...a: unknown[]) => applyDensity(...a),
+}));
 vi.mock('../lib/api', () => ({
   api: {
     auth: {
@@ -97,6 +101,45 @@ describe('SettingsSheet', () => {
     expect(applyTheme).toHaveBeenCalledWith(null, 'mauve');
   });
 
+  it('applies the Dense density via applyDensity', async () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dense' }));
+
+    expect(applyDensity).toHaveBeenCalledWith('dense');
+  });
+
+  it('maps Comfortable to a null density', async () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    // Move off Comfortable first, then back, so the click is a real state change.
+    await fireEvent.click(screen.getByRole('button', { name: 'Dense' }));
+    applyDensity.mockClear();
+    await fireEvent.click(screen.getByRole('button', { name: 'Comfortable' }));
+
+    expect(applyDensity).toHaveBeenCalledWith(null);
+  });
+
+  it('defaults to Comfortable and marks the selected density chip', async () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    const pressed = (name: string) =>
+      screen.getByRole('button', { name }).getAttribute('aria-pressed');
+    expect(pressed('Comfortable')).toBe('true');
+    expect(pressed('Dense')).toBe('false');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Dense' }));
+    expect(pressed('Dense')).toBe('true');
+    expect(pressed('Comfortable')).toBe('false');
+  });
+
+  it('seeds the density chips from the persisted choice', () => {
+    localStorage.setItem('trug_density', 'dense');
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    expect(screen.getByRole('button', { name: 'Dense' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('defaults Theme + Accent open and the occasional sections collapsed', () => {
     render(SettingsSheet, { open: true, cookieAuth: true, onClose: vi.fn() });
 
@@ -104,6 +147,7 @@ describe('SettingsSheet', () => {
       screen.getByRole('button', { name }).getAttribute('aria-expanded');
     expect(expanded('Theme')).toBe('true');
     expect(expanded('Accent')).toBe('true');
+    expect(expanded('Density')).toBe('true');
     expect(expanded('Devices')).toBe('false');
     expect(expanded('Members')).toBe('false');
     expect(expanded('Connections')).toBe('false');

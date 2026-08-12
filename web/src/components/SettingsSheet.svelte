@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { fly, fade, slide } from 'svelte/transition';
-  import { d, DUR } from '../lib/motion';
-  import { applyTheme } from '../lib/theme';
+  import { fade } from 'svelte/transition';
+  import { d, fadeDur, DUR, EASE, EASE_CSS, rise, unfold, fold } from '../lib/motion';
+  import { applyTheme, applyDensity } from '../lib/theme';
   import {
     api,
     type SessionInfo,
@@ -42,18 +42,36 @@
     { id: 'yellow', label: 'Yellow' },
   ] as const;
 
+  // Row spacing. 'Comfortable' is the default and maps to a null density (no
+  // data-density attribute); 'dense' packs more of the list onto one screen.
+  const DENSITIES = [
+    { id: null, label: 'Comfortable' },
+    { id: 'dense', label: 'Dense' },
+  ] as const;
+
   // Seed from persisted choices so the sheet reflects the live theme.
   let flavour = $state<string | null>(localStorage.getItem('trug_flavour'));
   let accent = $state<string>(localStorage.getItem('trug_accent') ?? 'peach');
+  let density = $state<string | null>(localStorage.getItem('trug_density'));
 
   // --- collapsible sections -------------------------------------------------
-  // Every section is a disclosure. Theme + Accent default open (the everyday
-  // adjustments); Devices, Invite, Connections default collapsed (occasional).
-  // Open/closed state persists per section so the sheet reopens as you left it.
-  type SectionId = 'theme' | 'accent' | 'devices' | 'members' | 'connections' | 'ai' | 'about';
+  // Every section is a disclosure. Theme + Accent + Density default open (the
+  // everyday adjustments); Devices, Invite, Connections default collapsed
+  // (occasional). Open/closed state persists per section so the sheet reopens
+  // as you left it.
+  type SectionId =
+    | 'theme'
+    | 'accent'
+    | 'density'
+    | 'devices'
+    | 'members'
+    | 'connections'
+    | 'ai'
+    | 'about';
   const DEFAULT_OPEN: Record<SectionId, boolean> = {
     theme: true,
     accent: true,
+    density: true,
     devices: false,
     members: false,
     connections: false,
@@ -94,6 +112,11 @@
   function pickAccent(id: string) {
     accent = id;
     applyTheme(flavour, id);
+  }
+
+  function pickDensity(id: string | null) {
+    density = id;
+    applyDensity(id);
   }
 
   // --- devices (cookie-authed humans) ---------------------------------------
@@ -524,14 +547,15 @@
     aria-label="Close"
     onclick={onClose}
     onkeydown={(e) => e.key === 'Escape' && onClose()}
-    transition:fade={{ duration: d(DUR.fly) }}
+    transition:fade={{ duration: fadeDur(DUR.expand) }}
   ></div>
   <div
     class="sheet"
     role="dialog"
     aria-modal="true"
     aria-label="Settings"
-    transition:fly={{ y: 24, duration: d(DUR.fly) }}
+    in:rise={{ y: 24, duration: DUR.expand, easing: EASE.expand }}
+    out:rise={{ y: 24, duration: DUR.collapse, easing: EASE.collapse }}
   >
     <div class="grip" aria-hidden="true"></div>
     <div class="head">
@@ -550,7 +574,7 @@
         <span
           class="chev"
           class:open={openSections[id]}
-          style="transition: transform {d(DUR.slide)}ms ease"
+          style="transition: transform {d(DUR.expand)}ms {EASE_CSS.expand}"
           aria-hidden="true"
         >
           <Icon name="chevron-right" size={18} stroke={2} />
@@ -567,7 +591,8 @@
             id="settings-region-theme"
             role="region"
             aria-label="Theme"
-            transition:slide={{ duration: d(DUR.slide) }}
+            in:unfold
+            out:fold
           >
             <div class="chips">
               {#each FLAVOURS as f (f.label)}
@@ -594,7 +619,8 @@
             id="settings-region-accent"
             role="region"
             aria-label="Accent"
-            transition:slide={{ duration: d(DUR.slide) }}
+            in:unfold
+            out:fold
           >
             <div class="chips">
               {#each ACCENTS as a (a.id)}
@@ -614,6 +640,34 @@
         {/if}
       </section>
 
+      <section>
+        {@render disclosure('density', 'Density')}
+        {#if openSections.density}
+          <div
+            class="region"
+            id="settings-region-density"
+            role="region"
+            aria-label="Density"
+            in:unfold
+            out:fold
+          >
+            <div class="chips">
+              {#each DENSITIES as x (x.label)}
+                <button
+                  type="button"
+                  class="chip"
+                  class:selected={density === x.id}
+                  aria-pressed={density === x.id}
+                  onclick={() => pickDensity(x.id)}
+                >
+                  {x.label}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
+
       {#if cookieAuth}
         <section>
           {@render disclosure('devices', 'Devices')}
@@ -623,7 +677,8 @@
               id="settings-region-devices"
               role="region"
               aria-label="Devices"
-              transition:slide={{ duration: d(DUR.slide) }}
+              in:unfold
+              out:fold
             >
               {#if devicesError}
                 <p class="hint error">{devicesError}</p>
@@ -702,7 +757,8 @@
               id="settings-region-connections"
               role="region"
               aria-label="Connections"
-              transition:slide={{ duration: d(DUR.slide) }}
+              in:unfold
+              out:fold
             >
               {#if connectionsError}
                 <p class="hint error">{connectionsError}</p>
@@ -734,7 +790,8 @@
               id="settings-region-ai"
               role="region"
               aria-label="AI enrichment"
-              transition:slide={{ duration: d(DUR.slide) }}
+              in:unfold
+              out:fold
             >
               <p class="hint">
                 Optional. Common groceries already get icons and aisles with no key — a key
@@ -863,7 +920,12 @@
                         : 'Fetch models'}
                   </button>
                   {#if aiFetchingModels}
-                    <span class="spinner" aria-label="Fetching models" role="status"></span>
+                    <span
+                      class="spinner"
+                      data-motion="essential"
+                      aria-label="Fetching models"
+                      role="status"
+                    ></span>
                   {:else if aiModels.length > 0 && !aiManualModel}
                     <span class="hint model-count">{aiModels.length} available</span>
                     <button
@@ -953,7 +1015,8 @@
               id="settings-region-members"
               role="region"
               aria-label="Members"
-              transition:slide={{ duration: d(DUR.slide) }}
+              in:unfold
+              out:fold
             >
               {#if membersError}<p class="hint error">{membersError}</p>{/if}
 
@@ -1036,7 +1099,8 @@
             id="settings-region-about"
             role="region"
             aria-label="About"
-            transition:slide={{ duration: d(DUR.slide) }}
+            in:unfold
+            out:fold
           >
             <p class="hint">Trug v{version}</p>
             <p class="hint">
@@ -1490,6 +1554,10 @@
       transform: rotate(360deg);
     }
   }
+  /* Slowed, never stopped — and it takes `data-motion="essential"` on the
+     element to get that far: app.css kills every other animation outright under
+     reduced motion, and a spinner that stops spinning is not a calm spinner,
+     it is a missing progress indicator. */
   @media (prefers-reduced-motion: reduce) {
     .spinner {
       animation-duration: 1.6s;

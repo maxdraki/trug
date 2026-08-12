@@ -1,6 +1,6 @@
 DEFAULT_WALK_ORDER = [
     "Fruit & Veg", "Bakery", "Meat & Fish", "Dairy & Eggs", "Cupboard",
-    "Frozen", "Drinks", "Household", "Pet", "Other",
+    "Herbs & Spices", "Frozen", "Drinks", "Household", "Pet", "Other",
 ]
 
 

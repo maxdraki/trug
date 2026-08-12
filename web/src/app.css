@@ -20,9 +20,27 @@
   --font-display: 'Space Grotesk Variable', 'Inter Variable', system-ui, sans-serif;
   /* One radius for the whole system. */
   --radius: 8px;
+  /* Side gutter of the app column — the padding <main> puts around everything
+     it scrolls. It is a token rather than a literal because the list is
+     edge-to-edge: the shelf cancels this gutter with a negative margin and
+     re-spends it inside its own rows and labels, and the two numbers have to be
+     the same one or the list drifts out of line with the add bar. */
+  --app-gutter: 16px;
   /* Hairline rule: the primary separator — depth comes from the
      crust/mantle/base ladder plus these, not from glow. */
   --hairline: 1px solid var(--ctp-surface0);
+  /* The one fill in the list body: the shelf-label band. (The basket's header is
+     not one of these — it is a drawer handle, and the tint is precisely what
+     would make it read as one more aisle.) Rows are the bare base surface — the
+     lightest rung the
+     flavour has — separated by hairlines, so the band is the only thing left
+     that groups them, and it has to carry that on its own now the card edges are
+     gone. It steps one rung DOWN the ladder to mantle, the surface the header
+     and the add bar already sit on, with a whisper of accent for warmth. The old
+     treatment was 3% accent over base: that was a tint on a card, and full-bleed
+     it disappeared — two surfaces a shade apart with no edge to tell them
+     apart. */
+  --band-fill: color-mix(in srgb, var(--accent) 5%, var(--ctp-mantle));
   /* Near-imperceptible shadow, tinted from crust (never full-alpha black in
      light flavours). The keyword black appears only inside this mix. */
   --shadow-tint: color-mix(in srgb, var(--ctp-crust) 55%, black);
@@ -30,6 +48,65 @@
   --shadow-2:
     0 1px 2px color-mix(in srgb, var(--shadow-tint) 16%, transparent),
     0 8px 24px -12px color-mix(in srgb, var(--shadow-tint) 28%, transparent);
+  /* Picked up off the shelf, not resting on it. --shadow-2 is a card at rest;
+     a lifted row has to read as being ABOVE the row it is currently covering,
+     which at full bleed it cannot do on offset alone. */
+  --shadow-lift:
+    0 2px 4px color-mix(in srgb, var(--shadow-tint) 20%, transparent),
+    0 14px 30px -10px color-mix(in srgb, var(--shadow-tint) 45%, transparent);
+
+  /* --- list density ------------------------------------------------------
+     The whole list rhythm in seven numbers — five for the row, two for the
+     shelf label. Comfortable is the default and the reference rendering: a 36px
+     chip in 8px of vertical padding makes a 60px row, under a 37px shelf label.
+     Nothing else in the list is a token (the recents tray borrows
+     --row-note-size for its pills, deliberately).
+
+     --row-edge-pad is the gap between the row's edge and its check-off button.
+     It is the density lever, and it moves the ROW rather than the button: the
+     button sizes itself from its own content (see the dense block below). */
+  --row-edge-pad: 4px;
+  --row-pad-y: 8px;
+  --row-chip: 36px;
+  --row-name-size: 17px;
+  --row-note-size: 14px;
+  /* 12px, not 20px, because that is where the chip is: the row spends 4px of
+     inline padding plus the check-off button's own 8px before its chip starts,
+     and the band re-spends the same shelf gutter the row does. Anything else
+     and the label sits off the chip's left edge — an 8px wobble down the left
+     of the column that only full bleed made visible. More space above than
+     below so the band reads as belonging to the items under it, not floating
+     between two aisles. */
+  --aisle-head-pad: 10px 12px 8px;
+  --aisle-head-size: 13px;
+}
+
+/* Dense: ~15 rows a screen instead of ~11, for a big Saturday list. Rows land
+   at 46px, and the tap target is safe by construction rather than by luck:
+   ItemRow's `.toggle` is `align-items: center`, so it is sized by its own
+   content — chip 32 + 2×7 of padding = 46px — whatever the row's edge padding
+   is doing. Check-off is a one-handed tap at a moving trolley, so that number
+   has to stay over the 44px minimum, and at dense it clears it with 2px to
+   spare on the button alone.
+
+   Zeroing --row-edge-pad therefore does not grow the button. What it does is
+   stop the ROW being 54px: it is 8px a row, bought back from space the button
+   was never using, which over fifteen rows is most of a row and a half. Type
+   steps down only one notch (17→15px) because the name is read at arm's length
+   in a shop aisle. Attribute-driven, never a media query: density is the
+   shopper's choice, not the viewport's. */
+:root[data-density='dense'] {
+  --row-edge-pad: 0px;
+  --row-pad-y: 7px;
+  --row-chip: 32px;
+  --row-name-size: 15px;
+  /* The note steps down with the name. Left at 14px it lands within a pixel of
+     the dense name and the two lines stop reading as a hierarchy. */
+  --row-note-size: 13px;
+  /* Same total height as before (10px of padding), redistributed so the band
+     leans toward the items beneath it the way the comfortable one does. */
+  --aisle-head-pad: 6px 12px 4px;
+  --aisle-head-size: 12px;
 }
 
 html,
@@ -40,7 +117,9 @@ body {
      viewport for it (paired with interactive-widget=resizes-content in
      index.html); svh above is the fallback for browsers without dvh. */
   min-height: 100dvh;
-  /* Ladder: page = crust; the app column = mantle; cards = base. */
+  /* Ladder: page = crust; the app column = mantle; the shelf (and anything
+     raised onto it, like a lifted row) = base. The basket drawer steps back
+     down past the column to crust, which is what makes it read as recessed. */
   background: var(--ctp-crust);
 }
 
@@ -61,33 +140,100 @@ button {
   outline-offset: 2px;
 }
 
-/* CSS-only hover/focus transitions (JS-driven durations route through d()). */
+/* The tally that trails a label: an aisle's "how much is left on this shelf"
+   and the basket's "how many are already in". One rule rather than a copy in
+   each component, because the two are supposed to render identically and two
+   copies of an identical rule only stay identical until somebody tunes one.
+
+   Quieter than the label it trails, and tabular so the digits don't shuffle as
+   items are checked off. Both labels are set in the display face with 0.12em
+   tracking, which spaces a label's letters nicely and a number's digits badly,
+   so the tracking is cancelled here. Global rather than scoped: it is shared,
+   and the elements that wear it are two spans in two files. */
+.count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  color: var(--ctp-subtext0);
+}
+
+/* Reduced motion, substituted rather than stripped. (JS-driven durations route
+   through motion.ts `d()` / `fadeDur()`; this is the CSS-side half of the same
+   rule, and the 100ms below is that module's REDUCED_FADE.)
+
+   What goes is travel: transform, height, position, size — anything that moves
+   a thing across the screen or changes how big it is. What stays, shortened to
+   100ms, is opacity and colour. WCAG 2.3.3 explicitly excludes those from the
+   "motion animation" it asks to be suppressible, and killing them too is not a
+   neutral act: a row that changes state between two frames with no acknowledge-
+   ment at all forces you to re-read the list to find out what happened. A hard
+   snap is jarring in its own way.
+
+   The mechanism is the property list: restating `transition-property` overrides
+   whatever each element declared, so a transform or height transition simply is
+   not in it any more and applies instantly, while a colour one still runs.
+
+   `animation` is a blunter instrument — a keyframe track can move or recolour or
+   both — so it is killed wholesale, and anything whose animation is ESSENTIAL
+   feedback rather than decoration opts out with `data-motion="essential"` and
+   slows itself down instead. Today that is the model-probe spinner: a spinner
+   that stops spinning is not a calmer spinner, it is a missing progress
+   indicator. (It used to try exactly that with a plain `animation-duration`
+   override, and lost — `animation: none !important` expands to important
+   longhands, so the spinner rendered as a static circle.) */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    transition: none !important;
+  *:not([data-motion='essential']),
+  *:not([data-motion='essential'])::before,
+  *:not([data-motion='essential'])::after {
+    transition-property: opacity, color, background-color, border-color, box-shadow, fill,
+      stroke !important;
+    transition-duration: 100ms !important;
+    transition-delay: 0ms !important;
     animation: none !important;
   }
 }
 
-/* Scrollbars as hairlines: thin surface0 thumb, no track — the default
-   chunky track fights the hairline aesthetic. */
-* {
+/* The app column keeps its scrollbar, deliberately. Hiding it was tried: it
+   reclaims 11px of column width on a desktop and removes a line that fights the
+   edge-to-edge list. It was reverted because that gutter only ever appears for
+   someone whose OS is set to "always show scroll bars", which is as often an
+   accessibility need as a preference — and overriding it would buy nothing at all
+   on the phone this app is really for, where the scrollbar is an overlay that
+   fades out and reserves no space. The one screen that would gain is the one
+   whose owner asked to see the bar. So they are dressed rather than hidden: */
+
+/* Scrollbars as hairlines: thin surface0 thumb, no track — the default chunky
+   track fights the hairline aesthetic. Named, not applied to `*`: these are the
+   only boxes in the app that actually scroll, and dressing every element in the
+   document to reach them meant the rule read as a global truth when it is really
+   about the column and four panels. The five, once, since the same roster is
+   spelled out by every rule below:
+
+     main       the app column — the list itself
+     .dropdown  AddBar's typeahead list
+     .sheet     ItemSheet and SettingsSheet panels
+     .body      SettingsSheet's scrolling body
+     .mono      SettingsSheet's token line — this one scrolls sideways
+
+   `:is()` rather than CSS nesting: nothing else in this stylesheet nests, and a
+   scrollbar block is not the place to introduce a second syntax for grouping.
+   The one thing it changes is specificity — `:is()` levels its arguments up to
+   the most specific one, so bare `main` now matches at class strength. Nothing
+   else in the app styles a scrollbar, so nothing notices. */
+:is(main, .dropdown, .sheet, .body, .mono) {
   scrollbar-width: thin;
   scrollbar-color: var(--ctp-surface0) transparent;
 }
-*::-webkit-scrollbar {
+:is(main, .dropdown, .sheet, .body, .mono)::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-*::-webkit-scrollbar-track {
+:is(main, .dropdown, .sheet, .body, .mono)::-webkit-scrollbar-track {
   background: transparent;
 }
-*::-webkit-scrollbar-thumb {
+:is(main, .dropdown, .sheet, .body, .mono)::-webkit-scrollbar-thumb {
   background: var(--ctp-surface0);
   border-radius: 3px;
 }
-*::-webkit-scrollbar-thumb:hover {
+:is(main, .dropdown, .sheet, .body, .mono)::-webkit-scrollbar-thumb:hover {
   background: var(--ctp-surface1);
 }

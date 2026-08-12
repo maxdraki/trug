@@ -162,6 +162,89 @@ def test_catalog_frecency_and_singularisation(repo):
     assert repo.catalog_entry("egg")["times_added"] == 4
 
 
+def test_plural_then_singular_lands_on_one_row(repo):
+    """The reported bug end-to-end: "add Lemons, then add Lemon, end up with two
+    rows". add_item feeds normalise the CATALOGUE keys (known_norms), so the
+    second add's "lemon" pluralises onto the established "lemons" key and dedups
+    onto the existing row. The survivor is the FIRST spelling — the dedup branch
+    returns the stored row untouched, so the list keeps showing "Lemons"."""
+    a, created_a = repo.add_item(None, "Lemons", None, "pwa", "alice")
+    b, created_b = repo.add_item(None, "Lemon", "waxed", "pwa", "alice")
+
+    assert created_a and not created_b
+    assert b["id"] == a["id"]
+    assert b["name"] == "Lemons"          # first spelling wins the display name
+    assert b["note"] == "waxed"           # the second add's note is absorbed
+    assert len(repo.list_items()["active"]) == 1
+    assert repo.known_norms() == {"lemons"}
+
+
+def test_singular_then_plural_lands_on_one_row(repo):
+    """The direction that already worked (rule 2, singularise onto a known key)
+    must keep working: "Lemon" then "Lemons" is one row, displaying "Lemon"."""
+    a, created_a = repo.add_item(None, "Lemon", None, "pwa", "alice")
+    b, created_b = repo.add_item(None, "Lemons", None, "pwa", "alice")
+
+    assert created_a and not created_b
+    assert b["id"] == a["id"]
+    assert b["name"] == "Lemon"
+    assert len(repo.list_items()["active"]) == 1
+    assert repo.known_norms() == {"lemon"}
+
+
+def test_fold_happens_only_onto_a_catalogue_key(repo):
+    """The fold never invents a key: a singular whose plural the catalogue does
+    not hold stays exactly as typed, and gets its own row."""
+    repo.add_item(None, "Lemons", None, "pwa", "alice")
+    pear, created = repo.add_item(None, "Pear", None, "pwa", "alice")
+
+    assert created and pear["name"] == "Pear"
+    assert len(repo.list_items()["active"]) == 2
+    assert repo.known_norms() == {"lemons", "pear"}
+    assert "pears" not in repo.known_norms()
+
+
+def test_asparagus_is_never_stemmed_to_asparagu(repo):
+    """The `in known` guard, end-to-end: an s-final singular is not a plural.
+    Adding it to a fresh list, and again to a list holding unrelated keys, must
+    leave the catalogue key "asparagus" and never create "asparagu"."""
+    repo.add_item(None, "Milk", None, "pwa", "alice")
+    a, created = repo.add_item(None, "Asparagus", None, "pwa", "alice")
+    assert created and a["name"] == "Asparagus"
+
+    b, created_b = repo.add_item(None, "  ASPARAGUS ", None, "ring", None)
+    assert not created_b and b["id"] == a["id"] and b["name"] == "Asparagus"
+
+    assert "asparagu" not in repo.known_norms()
+    assert repo.known_norms() == {"milk", "asparagus"}
+    assert len(repo.list_items()["active"]) == 2
+
+
+def test_a_catalogued_asparagu_typo_still_captures_asparagus(repo):
+    """Known consequence of precedence rule 2, pinned so a change is deliberate:
+    the guard only asks whether the stripped stem IS a catalogue key, so a
+    mistyped "Asparagu" the household once added makes the next "Asparagus"
+    fold onto the typo's row — the real word never gets a row of its own, and
+    the list keeps showing "Asparagu". The reverse order is the happy one: with
+    "asparagus" established, a later "Asparagu" pluralises back onto the real
+    word (rule 3), so the typo is absorbed rather than given its own row."""
+    typo, _ = repo.add_item(None, "Asparagu", None, "pwa", "alice")
+    folded, created = repo.add_item(None, "Asparagus", None, "pwa", "alice")
+
+    assert not created and folded["id"] == typo["id"]
+    assert folded["name"] == "Asparagu"
+    assert repo.known_norms() == {"asparagu"}
+
+    # Reverse order: with the real word catalogued first, the typo folds onto it
+    # (rule 3) instead of earning a second row.
+    fresh = Repository(":memory:")
+    real, _ = fresh.add_item(None, "Asparagus", None, "pwa", "alice")
+    stray, created_stray = fresh.add_item(None, "Asparagu", None, "pwa", "alice")
+    assert not created_stray and stray["id"] == real["id"]
+    assert stray["name"] == "Asparagus"
+    assert fresh.known_norms() == {"asparagus"}
+
+
 def test_enrichment_written_once(repo):
     # "widget" is not a tier-0 builtin, so set_enrichment is the first writer.
     repo.add_item(None, "widget", None, "pwa", "alice")
@@ -428,3 +511,112 @@ def test_migration_coconut_milk_icon_is_idempotent(tmp_path):
     Repository(str(dbfile))
     repo2 = Repository(str(dbfile))
     assert repo2.catalog_entry("coconut milk")["icon"] == "soup"
+
+
+def _make_unfiled_db(tmp_path, name="unfiled.db"):
+    """A pre-Herbs & Spices database: spice-rack names stranded in ``Other``
+    with no icon, alongside rows the backfill must not touch."""
+    import sqlite3
+
+    dbfile = tmp_path / name
+    conn = sqlite3.connect(str(dbfile))
+    conn.executescript(_OLD_SCHEMA)
+    conn.execute(
+        "CREATE TABLE catalog (name_norm TEXT PRIMARY KEY, display_name TEXT NOT NULL, "
+        "icon TEXT, category TEXT, times_added INTEGER NOT NULL DEFAULT 0, last_added TEXT)"
+    )
+
+    def item(item_id, name, norm, icon, category):
+        conn.execute(
+            "INSERT INTO items (id, name, name_norm, icon, category, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'active', '2020-01-01T00:00:00+00:00')",
+            (item_id, name, norm, icon, category),
+        )
+
+    # Placeable by the built-in map, stranded in Other / NULL with no icon.
+    item("i1", "Thyme", "thyme", None, "Other")
+    item("i2", "Cumin", "cumin", None, None)
+    item("i3", "Chives", "chives", None, "Other")
+    # Must be left alone:
+    item("i4", "Paprika", "paprika", "salt", "Cupboard")  # deliberately filed
+    item("i5", "Sage", "sage", "leaf", "Other")           # already has an icon
+    item("i6", "Ferret Harness", "ferret harness", None, "Other")  # map knows nothing
+
+    conn.execute(
+        "INSERT INTO catalog (name_norm, display_name, icon, category, times_added, "
+        "last_added) VALUES ('paprika', 'Paprika', 'salt', 'Cupboard', 3, "
+        "'2020-01-01T00:00:00+00:00')"
+    )
+    # Catalogued (from an older map) but not currently on the list.
+    conn.execute(
+        "INSERT INTO catalog (name_norm, display_name, icon, category, times_added, "
+        "last_added) VALUES ('cinnamon', 'Cinnamon', 'cookie', 'Cupboard', 2, "
+        "'2020-01-01T00:00:00+00:00')"
+    )
+    # Learned for a name the built-in map has never heard of — never touched.
+    conn.execute(
+        "INSERT INTO catalog (name_norm, display_name, icon, category, times_added, "
+        "last_added) VALUES ('ferret harness', 'Ferret Harness', 'paw', 'Pet', 1, "
+        "'2020-01-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+    return dbfile
+
+
+def _by_id(repo):
+    rows = repo.list_items()
+    return {i["id"]: i for i in rows["active"] + rows["checked"]}
+
+
+def test_migration_refiles_unfiled_items_the_builtin_map_can_place(tmp_path):
+    items = _by_id(Repository(str(_make_unfiled_db(tmp_path))))
+    assert (items["i1"]["icon"], items["i1"]["category"]) == ("leaf", "Herbs & Spices")
+    assert (items["i2"]["icon"], items["i2"]["category"]) == ("salt", "Herbs & Spices")
+    assert (items["i3"]["icon"], items["i3"]["category"]) == ("leaf", "Herbs & Spices")
+
+
+def test_migration_leaves_filed_and_enriched_items_alone(tmp_path):
+    items = _by_id(Repository(str(_make_unfiled_db(tmp_path))))
+    # Filed under a real aisle by a human or the LLM: not our call to move.
+    assert (items["i4"]["icon"], items["i4"]["category"]) == ("salt", "Cupboard")
+    # Other, but already carries an icon — enrichment has had its say.
+    assert (items["i5"]["icon"], items["i5"]["category"]) == ("leaf", "Other")
+    # The map cannot place it, so it stays put.
+    assert (items["i6"]["icon"], items["i6"]["category"]) == (None, "Other")
+
+
+def test_migration_refile_does_not_fight_a_later_user_move(tmp_path):
+    dbfile = _make_unfiled_db(tmp_path)
+    repo = Repository(str(dbfile))
+    # The user drags Thyme back out of the new aisle...
+    repo.update_item("i1", category="Other")
+    # ...and a reboot re-runs the migration, which must not drag it back.
+    items = _by_id(Repository(str(dbfile)))
+    assert items["i1"]["category"] == "Other"
+    assert items["i1"]["icon"] == "leaf"
+
+
+def test_migration_refile_is_idempotent(tmp_path):
+    dbfile = _make_unfiled_db(tmp_path)
+    Repository(str(dbfile))
+    items = _by_id(Repository(str(dbfile)))
+    assert (items["i1"]["icon"], items["i1"]["category"]) == ("leaf", "Herbs & Spices")
+    assert (items["i4"]["icon"], items["i4"]["category"]) == ("salt", "Cupboard")
+
+
+def test_migration_refiles_catalog_for_names_the_builtin_map_knows(tmp_path):
+    repo = Repository(str(_make_unfiled_db(tmp_path)))
+    entry = repo.catalog_entry("paprika")
+    assert (entry["icon"], entry["category"]) == ("salt", "Herbs & Spices")
+    # Learned knowledge for a name outside the built-in map is preserved.
+    unknown = repo.catalog_entry("ferret harness")
+    assert (unknown["icon"], unknown["category"]) == ("paw", "Pet")
+
+
+def test_migration_makes_a_fresh_add_land_in_the_new_aisle(tmp_path):
+    repo = Repository(str(_make_unfiled_db(tmp_path)))
+    item, created = repo.add_item(None, "cinnamon", None, "web", None)
+    # The stale-catalogue row was the thing pinning re-adds to Cupboard.
+    assert created is True
+    assert (item["icon"], item["category"]) == ("salt", "Herbs & Spices")

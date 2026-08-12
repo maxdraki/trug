@@ -12,6 +12,50 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * How long a request may hang before we abort it ourselves.
+ *
+ * A fetch that REJECTS is harmless — the op queue keeps the op, the banner
+ * shows, and the next drain retries. A fetch that never settles is fatal: the
+ * queue parks on `await exec(op)` and every later tap coalesces onto the same
+ * dead promise, so the list goes permanently inert (offline, N queued, server
+ * reachable, console empty) for the life of the page. That is not theoretical —
+ * a backend restarted behind a proxy that holds the socket open, a captive
+ * portal, or iOS freezing an installed PWA all produce it.
+ *
+ * 10s is chosen to sit in the gap between the two timescales that matter: the
+ * slowest legitimate response (a cold-starting container on a home Pi answers
+ * well inside it, and every normal call is sub-second on a LAN) and the
+ * shopper's patience at the shelf (a tap that has done nothing for ten seconds
+ * has already been read as broken). It is also comfortably below the periodic
+ * retry interval in AppShell, so a timing-out request cannot pile up behind the
+ * next scheduled one.
+ *
+ * We drive it with our own AbortController rather than `AbortSignal.timeout`
+ * so the timer is a normal `setTimeout` — cancellable the moment the request
+ * settles, and controllable under fake timers in tests.
+ */
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+/** `fetch` that always rides the session cookie and always has a deadline. */
+async function fetchWithTimeout(path: string, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () =>
+      controller.abort(
+        // A DOMException, not an ApiError — so callers route it down the
+        // "couldn't reach the server" path, exactly like a dropped connection.
+        new DOMException(`${path} timed out after ${REQUEST_TIMEOUT_MS}ms`, 'TimeoutError'),
+      ),
+    REQUEST_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(path, { ...init, signal: controller.signal, credentials: 'same-origin' });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function setToken(t: string): void {
   localStorage.setItem(TOKEN_KEY, t);
 }
@@ -30,10 +74,12 @@ export function clearToken(): void {
  * server accepted it. `headers` carries a candidate bearer when validating one;
  * omitted, the same-origin session cookie is the only credential. Network
  * failures resolve to false — a probe should never wave auth through on a fluke.
+ * A hung server counts as a network failure via the request deadline, so the
+ * gate can never be left waiting on a socket nobody is going to answer.
  */
 async function probeList(headers?: Record<string, string>): Promise<boolean> {
   try {
-    const res = await fetch('/api/list', { headers, credentials: 'same-origin' });
+    const res = await fetchWithTimeout('/api/list', { headers });
     return res.ok;
   } catch {
     return false;
@@ -73,7 +119,7 @@ export type AuthProbe = 'ok' | 'lost' | 'error';
  */
 async function probeStatus(headers?: Record<string, string>): Promise<AuthProbe> {
   try {
-    const res = await fetch('/api/list', { headers, credentials: 'same-origin' });
+    const res = await fetchWithTimeout('/api/list', { headers });
     if (res.ok) return 'ok';
     if (res.status === 401 || res.status === 403) return 'lost';
     return 'error';
@@ -126,7 +172,7 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
   if (token) headers.Authorization = `Bearer ${token}`;
   if (init.body != null) headers['Content-Type'] = 'application/json';
 
-  const res = await fetch(path, { ...init, headers, credentials: 'same-origin' });
+  const res = await fetchWithTimeout(path, { ...init, headers });
   if (!res.ok) {
     throw new ApiError(res.status, await errorMessage(res, `${init.method ?? 'GET'} ${path}`));
   }

@@ -22,6 +22,7 @@ BAKERY = "Bakery"
 MEAT_FISH = "Meat & Fish"
 DAIRY = "Dairy & Eggs"
 CUPBOARD = "Cupboard"
+HERBS = "Herbs & Spices"
 FROZEN = "Frozen"
 DRINKS = "Drinks"
 HOUSEHOLD = "Household"
@@ -72,7 +73,11 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "shallot": ("plant", FRUIT_VEG),
     "garlic": ("plant", FRUIT_VEG),
     "leek": ("plant", FRUIT_VEG),
+    # Bare "ginger" is the root in the veg rack; "ground ginger" is the jar and
+    # lives in Herbs & Spices (below).
     "ginger": ("plant", FRUIT_VEG),
+    "root ginger": ("plant", FRUIT_VEG),
+    "fresh ginger": ("plant", FRUIT_VEG),
     "peas": ("plant", FRUIT_VEG),
     "green bean": ("plant", FRUIT_VEG),
     "sweetcorn": ("plant", FRUIT_VEG),
@@ -96,11 +101,25 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "pepper": ("pepper", FRUIT_VEG),
     "chilli": ("pepper", FRUIT_VEG),
     "mushroom": ("mushroom", FRUIT_VEG),
-    "herb": ("leaf", FRUIT_VEG),
+    "fennel bulb": ("salad", FRUIT_VEG),
+    # Fresh-vs-dried rule: a bare herb name follows the dominant UK purchase
+    # form (these four are sold as pots/cut bunches in the produce aisle, so
+    # they stay here); an explicit "fresh …" is ALWAYS produce and an explicit
+    # "dried …" is always the jar. The herbs bought dried by default —
+    # oregano, thyme, sage, dill, chives, tarragon, rosemary, bay — sit in
+    # Herbs & Spices with their own "fresh …" keys below.
     "basil": ("leaf", FRUIT_VEG),
     "coriander": ("leaf", FRUIT_VEG),
     "parsley": ("leaf", FRUIT_VEG),
     "mint": ("leaf", FRUIT_VEG),
+    "fresh herb": ("leaf", FRUIT_VEG),
+    "fresh oregano": ("leaf", FRUIT_VEG),
+    "fresh thyme": ("leaf", FRUIT_VEG),
+    "fresh sage": ("leaf", FRUIT_VEG),
+    "fresh dill": ("leaf", FRUIT_VEG),
+    "fresh chive": ("leaf", FRUIT_VEG),
+    "fresh tarragon": ("leaf", FRUIT_VEG),
+    "fresh rosemary": ("leaf", FRUIT_VEG),
 
     # --- Bakery -------------------------------------------------------
     "bread": ("bread", BAKERY),
@@ -128,6 +147,11 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "naan": ("bread", BAKERY),
     "flatbread": ("bread", BAKERY),
     "crumpet": ("bread", BAKERY),
+    # Cinnamon bakery: "cinnamon" (8) beats "bun"/"roll" (below the four-char
+    # substring floor, and shorter anyway), so these need explicit keys.
+    "cinnamon swirl": ("bread", BAKERY),
+    "cinnamon bun": ("bread", BAKERY),
+    "cinnamon roll": ("bread", BAKERY),
     "pancake": ("cake", BAKERY),
     "muffin": ("cake", BAKERY),
     "cupcake": ("cake", BAKERY),
@@ -194,6 +218,10 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "custard": ("milk", DAIRY),
     "yoghurt": ("milk", DAIRY),
     "yogurt": ("milk", DAIRY),
+    # "vanilla" (7) would otherwise outrank "yogurt" (6) on the longest-key
+    # rule and file the pot with the spice jars.
+    "vanilla yoghurt": ("milk", DAIRY),
+    "vanilla yogurt": ("milk", DAIRY),
     "butter": ("milk", DAIRY),
     "margarine": ("milk", DAIRY),
     "spread": ("milk", DAIRY),
@@ -245,12 +273,6 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "flour": ("wheat", CUPBOARD),
     "yeast": ("wheat", CUPBOARD),
     "sugar": ("salt", CUPBOARD),
-    "salt": ("salt", CUPBOARD),
-    "spice": ("salt", CUPBOARD),
-    "pepper spice": ("salt", CUPBOARD),
-    "paprika": ("salt", CUPBOARD),
-    "cinnamon": ("salt", CUPBOARD),
-    "curry powder": ("salt", CUPBOARD),
     "stock cube": ("salt", CUPBOARD),
     "baking powder": ("salt", CUPBOARD),
     "oil": ("bottle", CUPBOARD),
@@ -291,7 +313,90 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "pickle": ("salad", CUPBOARD),
     "tea": ("cup", CUPBOARD),
     "tea bag": ("cup", CUPBOARD),
+    # "herb" is a substring of "herbal"/"sherbet"; these keys are longer, so
+    # the tea and the sweets stay in the cupboard.
+    "herbal tea": ("cup", CUPBOARD),
+    "sherbet": ("candy", CUPBOARD),
+    # "peppercorn" (10) would otherwise carry the jarred sauce to the spice
+    # shelf.
+    "peppercorn sauce": ("bottle", CUPBOARD),
     "coffee": ("coffee", CUPBOARD),
+
+    # --- Herbs & Spices -----------------------------------------------
+    # The seasoning shelf: dried aromatics (icon ``leaf``) and everything that
+    # comes in a spice jar or grinder (icon ``salt``). Salt and flavourings
+    # count as seasoning and live here; bulk baking goods and raising agents
+    # (sugar, flour, baking powder, yeast) stay in Cupboard.
+    "herb": ("leaf", HERBS),
+    "dried herb": ("leaf", HERBS),
+    "mixed herb": ("leaf", HERBS),
+    "italian herb": ("leaf", HERBS),
+    "oregano": ("leaf", HERBS),
+    "thyme": ("leaf", HERBS),
+    "sage": ("leaf", HERBS),
+    "dill": ("leaf", HERBS),
+    "chive": ("leaf", HERBS),
+    "tarragon": ("leaf", HERBS),
+    "rosemary": ("leaf", HERBS),
+    "marjoram": ("leaf", HERBS),
+    # "bay leaves" cannot be reached from "bay leaf" (the trailing-s fallback
+    # only strips one character), so both spellings are keys.
+    "bay leaf": ("leaf", HERBS),
+    "bay leaves": ("leaf", HERBS),
+    "dried basil": ("leaf", HERBS),
+    "dried coriander": ("leaf", HERBS),
+    "dried parsley": ("leaf", HERBS),
+    "dried mint": ("leaf", HERBS),
+    "spice": ("salt", HERBS),
+    "mixed spice": ("salt", HERBS),
+    "seasoning": ("salt", HERBS),
+    "salt": ("salt", HERBS),
+    "sea salt": ("salt", HERBS),
+    "table salt": ("salt", HERBS),
+    "rock salt": ("salt", HERBS),
+    # Longer than the "celery" produce key, so the exact/longest rule keeps it
+    # off the salad shelf.
+    "celery salt": ("salt", HERBS),
+    # "pepper" (bell peppers) and "chilli" stay in Fruit & Veg; the ground and
+    # dried forms need their own longer keys to outrank them.
+    "black pepper": ("salt", HERBS),
+    "white pepper": ("salt", HERBS),
+    "ground pepper": ("salt", HERBS),
+    "pepper spice": ("salt", HERBS),
+    "peppercorn": ("salt", HERBS),
+    "chilli powder": ("salt", HERBS),
+    "chilli flake": ("salt", HERBS),
+    "dried chilli": ("salt", HERBS),
+    "cayenne": ("salt", HERBS),
+    "cayenne pepper": ("salt", HERBS),
+    "paprika": ("salt", HERBS),
+    "smoked paprika": ("salt", HERBS),
+    "turmeric": ("salt", HERBS),
+    "cinnamon": ("salt", HERBS),
+    "nutmeg": ("salt", HERBS),
+    "ground ginger": ("salt", HERBS),
+    "cumin": ("salt", HERBS),
+    "cumin seed": ("salt", HERBS),
+    "ground coriander": ("salt", HERBS),
+    "coriander seed": ("salt", HERBS),
+    "curry powder": ("salt", HERBS),
+    "garam masala": ("salt", HERBS),
+    "cardamom": ("salt", HERBS),
+    "clove": ("salt", HERBS),
+    "star anise": ("salt", HERBS),
+    "saffron": ("salt", HERBS),
+    "allspice": ("salt", HERBS),
+    "caraway": ("salt", HERBS),
+    "caraway seed": ("salt", HERBS),
+    "mustard seed": ("salt", HERBS),
+    # Bare "fennel" is the spice jar (the bulb needs "fennel bulb", above).
+    "fennel": ("salt", HERBS),
+    "fennel seed": ("salt", HERBS),
+    # Flavourings sit with the spices, not with the baking staples.
+    "vanilla": ("salt", HERBS),
+    "vanilla extract": ("salt", HERBS),
+    "vanilla essence": ("salt", HERBS),
+    "vanilla pod": ("salt", HERBS),
 
     # --- Frozen -------------------------------------------------------
     "ice cream": ("ice-cream", FROZEN),
@@ -335,6 +440,9 @@ BUILTIN: dict[str, tuple[str, str]] = {
     "whisky": ("glass-cocktail", DRINKS),
     "whiskey": ("glass-cocktail", DRINKS),
     "rum": ("glass-cocktail", DRINKS),
+    # "rum" is under the four-character substring floor, so bare "spice" (5)
+    # wins "spiced rum" unless the whole phrase is a key.
+    "spiced rum": ("glass-cocktail", DRINKS),
     "brandy": ("glass-cocktail", DRINKS),
 
     # --- Household ----------------------------------------------------

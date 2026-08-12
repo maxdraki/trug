@@ -22,6 +22,28 @@ Every feature idea gets tested against *"does this make Saturday's shop faster?"
 - **UI milestones** — verify in a real browser via the Playwright-driven design-review agent: Mocha + Latte, check-off animation, `prefers-reduced-motion`, offline banner. Screenshot evidence, not assertions.
 - **Conventional commits** on `main`.
 
+## Working in a shared tree
+
+Several agents run against this one working tree at once, and uncommitted work is
+usually the only copy of hours of it. So:
+
+- **Never use git to undo.** No `git stash`, `git checkout -- <file>`, `git reset`,
+  or `git restore` to revert your own experiment. They operate on the whole tree, or
+  on a file another agent is editing this second, and they have already destroyed a
+  sibling's work twice. Undo with an inverse edit: put back exactly the text you
+  replaced. If you mutated a file to check whether a test catches it, restore it by
+  writing the original content back, and verify with a checksum.
+- **Read before you assume the tree is yours.** A clean `git status` at the start of
+  your task does not mean the tree is clean now.
+- **Don't restart shared servers.** The API on `:8000` and Vite on `:5173` are the
+  owner's; restarting the API strands Vite's keep-alive sockets and wedges the
+  browser into a permanent fake-offline state with a queue that never drains. If you
+  genuinely must restart the API, restart Vite immediately afterwards.
+- **Diagnostics in the browser need a foreground window.** An occluded or
+  backgrounded tab pauses `requestAnimationFrame` and throttles timers to ~1/s, so
+  transitions never advance and measurements read as frozen. Check
+  `document.visibilityState` before concluding anything from a timing measurement.
+
 ## Hard rules
 
 - No-key mode (`LLM_API_KEY` unset) must pass the full acceptance path — never gate core function on the LLM.

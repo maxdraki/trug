@@ -94,7 +94,19 @@ def _parse(iso: str) -> datetime:
 class OAuthRepository:
     def __init__(self, path: str | Path):
         self.path = str(path)
-        self._lock = threading.Lock()
+        # CONNECTION-ACCESS lock, not a write lock. THE RULE: every use of
+        # ``self._conn`` — reads included — happens while holding this, and rows
+        # are fully materialised (``.fetchone()``/``.fetchall()``) before it is
+        # released. A sqlite3 connection caches prepared statements keyed by SQL
+        # TEXT, so two threads running the SAME query string share one underlying
+        # ``sqlite3_stmt``: one rebinds and resets it while the other steps it,
+        # which returned rows belonging to the WRONG principal — here, another
+        # user's token/grant. The connection is opened ``check_same_thread=False``,
+        # so nothing else serialises this. Reentrant so a locked method calling
+        # another locked one cannot deadlock the server; the cost is that an inner
+        # ``commit()`` ends the outer transaction, so multi-statement atomic units
+        # (consume_code, rotate_refresh_token) keep their SQL inline.
+        self._lock = threading.RLock()
         self._conn = self._connect()
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
@@ -135,9 +147,10 @@ class OAuthRepository:
             self._conn.commit()
 
     def get_client(self, client_id: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM oauth_clients WHERE client_id = ?", (client_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM oauth_clients WHERE client_id = ?", (client_id,)
+            ).fetchone()
         if row is None:
             return None
         client = dict(row)
@@ -172,9 +185,10 @@ class OAuthRepository:
     def get_cached_cimd(self, client_id: str) -> dict | None:
         """Return the cached CIMD document iff still fresh; else None so the
         caller re-fetches."""
-        row = self._conn.execute(
-            "SELECT * FROM oauth_cimd_cache WHERE client_id = ?", (client_id,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM oauth_cimd_cache WHERE client_id = ?", (client_id,)
+            ).fetchone()
         if row is None:
             return None
         if _parse(row["expires_at"]) < _now():
@@ -274,9 +288,11 @@ class OAuthRepository:
             self._conn.commit()
 
     def get_active_access_token(self, token_hash: str) -> dict | None:
-        row = self._conn.execute(
-            "SELECT * FROM oauth_access_tokens WHERE token_hash = ?", (token_hash,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM oauth_access_tokens WHERE token_hash = ?",
+                (token_hash,),
+            ).fetchone()
         if row is None or row["revoked"]:
             return None
         if _parse(row["expires_at"]) < _now():
@@ -350,12 +366,13 @@ class OAuthRepository:
     # --- listing (for later admin surfaces) ---------------------------
 
     def grants_for_user(self, user_id: str) -> list[dict]:
-        rows = self._conn.execute(
-            "SELECT client_id, scope, resource, created_at, expires_at "
-            "FROM oauth_access_tokens WHERE user_id = ? AND revoked = 0 "
-            "ORDER BY created_at DESC",
-            (user_id,),
-        ).fetchall()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT client_id, scope, resource, created_at, expires_at "
+                "FROM oauth_access_tokens WHERE user_id = ? AND revoked = 0 "
+                "ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod

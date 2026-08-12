@@ -77,6 +77,20 @@ if (typeof Element !== 'undefined' && typeof Element.prototype.animate !== 'func
   });
 }
 
+// Same gap, other end: Svelte asks a node for its running animations before it
+// starts an outro (so an interrupted transition can be reversed rather than
+// stacked). jsdom implements neither, and the missing `getAnimations` surfaces
+// as an unhandled TypeError from inside the transition machinery rather than as
+// a test failure — nothing is animating in jsdom, so an empty list is the
+// truthful answer.
+if (typeof Element !== 'undefined' && typeof Element.prototype.getAnimations !== 'function') {
+  Object.defineProperty(Element.prototype, 'getAnimations', {
+    configurable: true,
+    writable: true,
+    value: () => [],
+  });
+}
+
 // @testing-library/svelte only auto-registers its afterEach cleanup when Vitest
 // globals are enabled. This project uses explicit imports, so unmount rendered
 // components between tests here to stop the DOM accumulating across cases.

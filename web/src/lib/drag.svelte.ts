@@ -500,10 +500,32 @@ export function createDragController(deps: DragDeps): DragController {
     cleanup();
   }
 
+  /**
+   * The pointer stream can simply stop: the window loses focus to a cmd-tab, a
+   * system dialog or a permission prompt, and neither pointerup nor
+   * pointercancel is ever delivered. Nothing else tears the drag down, so the
+   * row would stay lifted and `start()`'s "one drag at a time" guard would
+   * refuse every later drag — the list reads as permanently un-draggable until
+   * a reload. Dropping the drag on blur is the safe reading: a drag you can no
+   * longer see is not one you're still making.
+   */
+  function onWindowBlur(): void {
+    if (!armed && !lifted) return;
+    cleanup();
+  }
+
+  /** The phone half of the same problem: switching apps mid-drag fires
+   * visibilitychange, not blur. */
+  function onHide(): void {
+    if (document.hidden) onWindowBlur();
+  }
+
   function cleanup(): void {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onCancel);
+    window.removeEventListener('blur', onWindowBlur);
+    document.removeEventListener('visibilitychange', onHide);
     window.removeEventListener('scroll', onScroll, { capture: true } as EventListenerOptions);
     clearTimeout(longPress);
     if (rafId) {
@@ -565,6 +587,8 @@ export function createDragController(deps: DragDeps): DragController {
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onWindowBlur);
+    document.addEventListener('visibilitychange', onHide);
     if (ev.pointerType === 'touch') {
       longPress = setTimeout(lift, LONGPRESS_MS);
     }

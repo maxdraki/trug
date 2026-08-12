@@ -147,7 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="trug", lifespan=lifespan)
     app.state.settings = settings
-    repo = Repository(settings.db_path)
+    repo = Repository(settings.db_path, walk_order=settings.walk_order)
     auth_repo = AuthRepository(settings.db_path)
     # No env-seeded roster: users are created dynamically (first user via the
     # bootstrap claim, everyone else via invite). Print the bootstrap token only

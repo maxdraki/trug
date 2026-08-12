@@ -35,5 +35,14 @@ export interface Op {
   kind: OpKind;
   item?: { id: string; name: string; note?: string };
   itemId?: string;
+  /**
+   * `add` only: the id of the row this op actually put on screen, which is not
+   * always `item.id`. When `add()` recognises the name locally it renders THAT
+   * existing row and sends a fresh uuid anyway (so the server's reactivate
+   * branch runs), so the rendered id — not the sent one — is what queued
+   * check-offs name and what reconciliation must clean up. Persisted with the
+   * op so a reload still knows which row belongs to it.
+   */
+  pendingId?: string;
   ts: string;
 }

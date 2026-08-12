@@ -1,7 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
-  import { fly } from 'svelte/transition';
-  import { d, DUR } from '../lib/motion';
+  import { DUR, EASE, rise } from '../lib/motion';
 
   let {
     variant = 'neutral',
@@ -14,7 +13,14 @@
   } = $props();
 </script>
 
-<div class="toast {variant}" role="status" transition:fly={{ y: 12, duration: d(DUR.fly) }}>
+<!-- In slower than out: it arrives with something to say, and leaves once it
+     has been read. -->
+<div
+  class="toast {variant}"
+  role="status"
+  in:rise={{ y: 12, duration: DUR.toastIn, easing: EASE.enter }}
+  out:rise={{ y: 12, duration: DUR.toastOut, easing: EASE.exit }}
+>
   {@render children()}
 </div>
 

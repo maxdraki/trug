@@ -1,12 +1,11 @@
 <script lang="ts">
-  import { slide } from 'svelte/transition';
   import { flip } from 'svelte/animate';
   import type { AnimationConfig } from 'svelte/animate';
   import type { Item } from '../lib/types';
   import ItemRow from './ItemRow.svelte';
   import Icon from './Icon.svelte';
   import { CATEGORY_ICON } from '../lib/walkOrder';
-  import { d, DUR, arriveRow, sendItem, keyOf } from '../lib/motion';
+  import { d, DUR, EASE_CSS, arriveRow, leaveRow, unfold, fold } from '../lib/motion';
 
   import type { DragController } from '../lib/drag.svelte';
   import { rowGapShift, aisleReserve } from '../lib/drag.svelte';
@@ -15,6 +14,7 @@
     category,
     items,
     pendingIds,
+    heldIds = new Set<string>(),
     drag,
     onToggle,
     onRemove,
@@ -25,6 +25,8 @@
     category: string;
     items: Item[];
     pendingIds: Set<string>;
+    /** Rows the store has already checked off, still here to play the strike. */
+    heldIds?: Set<string>;
     drag?: DragController;
     onToggle: (id: string) => void;
     onRemove: (id: string) => void;
@@ -44,6 +46,10 @@
   );
   // Gap transitions route through motion.ts `d()` so reduced motion is instant.
   const gapDur = $derived(d(DUR.gap));
+  // ...and the curve comes from the same table, published alongside it. The
+  // literal used to be spelled out twice in the stylesheet below, which is
+  // exactly the JS/CSS drift the dual EASE / EASE_CSS tables exist to stop.
+  const gapEase = EASE_CSS.gap;
 
   // Cross-aisle: origin and target are different groups. The per-row translateY
   // shift only *rearranges* rows within an aisle — it never changes the aisle's
@@ -98,46 +104,72 @@
     }
     return flip(node, dims, params);
   }
+
+  // The same question the FLIP above asks, as a plain function rather than a
+  // `{@const}` — and it has to be, because transition params are read at a
+  // moment when a `{@const}` lies. Svelte marks an each-branch INERT *before*
+  // calling `transition.out()`, and a `$derived` owned by an inert branch does
+  // not recompute: it warns (`derived_inert`) and hands back the previous
+  // frame's value. So `out:leaveRow` was being told whether the row was
+  // settling as of the frame before the drop. A function on the component
+  // instance has no branch to be inert, so it answers for now. `in:` is read
+  // while the branch is live and was never wrong, but it is the same landmine
+  // one edit away from going off, so it reads this too.
+  function isSettling(id: string): boolean {
+    return drag?.settlingId === id;
+  }
 </script>
 
 <section
   class="aisle"
   class:drop-target={isDropTarget}
   data-drag-aisle={category}
-  transition:slide={{ duration: d(DUR.slide) }}
+  in:unfold
+  out:fold
 >
   <h2 data-drag-label>
     <span class="cat-ico"><Icon name={CATEGORY_ICON[category] ?? 'shopping-bag'} size={18} stroke={1.75} /></span>
     {category}
+    <span class="count">{items.length}</span>
   </h2>
   <div
     class="rows"
     class:reserving={dragging}
-    style={dragging ? `margin-bottom: ${reserve}px; --gap-dur: ${gapDur}ms` : ''}
+    style={dragging
+      ? `margin-bottom: ${reserve}px; --gap-dur: ${gapDur}ms; --gap-ease: ${gapEase}`
+      : ''}
   >
     {#each items as item, i (item.id)}
       {@const shift = shiftFor(item, i)}
-      {@const suppressed = drag?.settlingId === item.id}
       {@const hidden = drag?.ghostId === item.id}
+      <!-- Held: checked off, still here for the length of the strike (DUR.check)
+           while it draws — see lib/hold.svelte.ts. It
+           stays tappable (a second tap un-checks it) but takes no drag and no
+           swipe, because a gesture on a row that is already leaving cannot mean
+           anything reliable. Nor does it take the `pending` dim: that fade would
+           run over the top of the confirmation this hold exists to show, and the
+           row wears it again the moment it lands in the basket. -->
+      {@const held = heldIds.has(item.id)}
       <div
         class="row-wrap"
         class:gapping={dragging}
+        class:lifting={drag?.draggingId === item.id}
         data-drag-id={item.id}
-        style={`${dragging ? `transform: translateY(${shift}px); --gap-dur: ${gapDur}ms;` : ''}${hidden ? 'opacity: 0;' : ''}`}
+        style={`${dragging ? `transform: translateY(${shift}px); --gap-dur: ${gapDur}ms; --gap-ease: ${gapEase};` : ''}${hidden ? 'opacity: 0;' : ''}`}
         animate:dragFlip={{ duration: d(DUR.flip) }}
-        in:arriveRow={{ key: keyOf(item.name), source: item.source, index: i, suppress: suppressed }}
-        out:sendItem={{ key: keyOf(item.name), suppress: suppressed }}
+        in:arriveRow={{ source: item.source, index: i, suppress: isSettling(item.id) }}
+        out:leaveRow={{ suppress: isSettling(item.id) }}
       >
         <ItemRow
           {item}
           {onToggle}
           {onRemove}
           {onOpen}
-          onDragStart={drag ? (it, ev, el) => drag.start(it, category, ev, el) : undefined}
-          {onSwipeLeft}
-          {onSwipeRight}
+          onDragStart={drag && !held ? (it, ev, el) => drag.start(it, category, ev, el) : undefined}
+          onSwipeLeft={held ? undefined : onSwipeLeft}
+          onSwipeRight={held ? undefined : onSwipeRight}
           index={i}
-          pending={pendingIds.has(item.id)}
+          pending={pendingIds.has(item.id) && !held}
         />
       </div>
     {/each}
@@ -147,32 +179,62 @@
 <style>
   /* Not a card — a continuous run of shelf on the single base surface owned by
      ListView. No background, border, radius or shadow of its own; adjacent
-     aisles are divided by a hairline (see ListView's `.shelf > * + *`). */
+     aisles are divided by a hairline (see ListView's `.shelf > section + section`). */
   .aisle {
     display: flex;
     flex-direction: column;
   }
   /* The Space Grotesk aisle label sits directly on its shelf-edge rule; rows
-     flow beneath it. */
+     flow beneath it.
+
+     Sticky, because with the card edges gone this band is the only thing left
+     saying which aisle you are looking at — scroll it away and a long Dairy run
+     is just rows. It sticks to <main>, the app's one scrolling box (ListView's
+     .shelf clips with `overflow: clip` rather than `hidden` precisely so it
+     does not become a scroll container and capture this). The containing block
+     is the .aisle section, so each band is pushed off by the next one instead of
+     stacking up.
+
+     z-index 2, deliberately between two things: above .swipe-content's 1, or the
+     rows would scroll over their own label; below .row.lifted's 5, so a row you
+     have picked up passes OVER the band rather than diving under it. */
   h2 {
+    position: sticky;
+    top: 0;
+    z-index: 2;
     display: flex;
     align-items: center;
     gap: 8px;
     margin: 0;
-    padding: 10px 20px 8px;
+    padding: var(--aisle-head-pad);
     font-family: var(--font-display);
-    font-size: 13px;
+    font-size: var(--aisle-head-size);
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    /* subtext1 clears 4.5:1 on the base surface in both Latte and Mocha. */
+    /* subtext1 on the band's own ground, which is mantle (--band-fill), not the
+       base the rows lie on: 5.14:1 in Latte, and Latte is the tight one — every
+       dark flavour is far clear of the floor. */
     color: var(--ctp-subtext1);
-    /* A whisper of accent tints the shelf label. */
-    background: color-mix(in srgb, var(--accent) 3%, transparent);
+    /* The only fill in the list body (see --band-fill). It also has to be opaque
+       now that the band is sticky — a tint would let the rows it covers read
+       straight through it. */
+    background: var(--band-fill);
+    /* The shelf runs edge-to-edge, so the label re-spends the column gutter
+       (--shelf-gutter, published by ListView's .shelf) to stay on the same left
+       edge it had inside the card. A transparent inline border, not padding:
+       --aisle-head-pad is one shorthand owned by the density tokens, and adding
+       to it here would mean restating its inline value in a second place that
+       then drifts the next time density is tuned. The border box still paints
+       the tint and the rule, so both keep reaching both edges of the column. */
+    border-inline: var(--shelf-gutter, 0px) solid transparent;
     /* The shelf edge the rows sit on. */
     border-bottom: var(--hairline);
     transition: color 120ms ease, border-color 120ms ease;
   }
+  /* `.count` — how much is left on this shelf, sitting straight after the aisle
+     name so the two read as one label — is styled in app.css, shared with the
+     basket drawer's count. */
   /* Recategorise affordance: no accent colour — the shelf-edge hairline simply
      brightens (subtext1) and the label steps up to full text, so the aisle
      under the dragged row reads as the drop target. */
@@ -194,15 +256,30 @@
     border-top: var(--hairline);
   }
   /* While a drag is in flight, rows ease as they part around / close over the
-     live drop slot. Duration comes from the inline --gap-dur (routed through
-     motion.ts d()), so reduced motion collapses the transition to instant. */
+     live drop slot. Duration AND curve come from the inline --gap-dur /
+     --gap-ease, both written from motion.ts's tables (the duration through
+     `d()`, so reduced motion collapses this to instant). The curve used to be
+     a literal here and in `.rows.reserving` below — two copies of a number
+     that lives in CURVE.gap, which is one edit away from the gap and the space
+     it opens into easing differently. */
   .row-wrap.gapping {
-    transition: transform var(--gap-dur, 0ms) cubic-bezier(0.2, 0, 0, 1);
+    transition: transform var(--gap-dur, 0ms) var(--gap-ease, linear);
+  }
+  /* Lift the *wrapper* of the dragged row, not just the row. Every wrapper takes
+     an inline transform while a drag is in flight, and a transform makes a
+     stacking context — which seals ItemRow's `.row.lifted { z-index: 5 }` inside
+     a box that itself ranks as z-index auto. The sticky shelf band (z-index 2)
+     then paints straight over the row you are holding: you drag it up to the
+     label and it slides underneath. Raising the wrapper past the band is what
+     puts the lifted row back on top, where a thing in your hand belongs. */
+  .row-wrap.lifting {
+    position: relative;
+    z-index: 6;
   }
   /* Cross-aisle space reservation: the target aisle grows and the origin aisle
      shrinks by one row-height so the opening gap has real space to live in and
      the vacated slot closes up — no row ever overhangs into the next aisle. */
   .rows.reserving {
-    transition: margin-bottom var(--gap-dur, 0ms) cubic-bezier(0.2, 0, 0, 1);
+    transition: margin-bottom var(--gap-dur, 0ms) var(--gap-ease, linear);
   }
 </style>

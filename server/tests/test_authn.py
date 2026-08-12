@@ -177,11 +177,11 @@ def test_invite_race_exactly_one_registration_succeeds(monkeypatch):
     both pass get_valid_invite and consume their own distinct challenge
     before either reaches invite redemption). This is the actual race: two
     requests that both observed the invite as still valid, racing to
-    redeem it. consume_invite's atomic UPDATE ... WHERE used_at IS NULL means
-    only one caller can flip it, and the route now checks that return value
-    before persisting a credential or starting a session — so exactly one of
-    the two verifies succeeds (200) and the other is told the invite is
-    already used (410), with only one credential row ever written."""
+    redeem it. redeem_invite_with_credential's atomic UPDATE ... WHERE used_at
+    IS NULL means only one caller can flip it, and the credential insert rides
+    in that same transaction — so exactly one of the two verifies succeeds
+    (200) and the other is told the invite is already used (410), with only one
+    credential row ever written."""
     c, app = make_auth_client()
     repo = app.state.auth_repo
     max_id = repo.get_user_by_name("alice")["id"]
@@ -201,13 +201,21 @@ def test_invite_race_exactly_one_registration_succeeds(monkeypatch):
     cred_b = make_credential("Y2hhbGxlbmdlLWItYnl0ZXM", cred_id="credB")
 
     results: dict[str, object] = {}
+    # A thread that dies used to leave `results` short, so the assertions below
+    # failed with a bare KeyError and the real exception was buried in stderr.
+    # Capture each thread's own failure and re-raise it here instead.
+    failures: list[BaseException] = []
 
     def call(key, credential, headers):
-        results[key] = c.post(
-            "/auth/register/verify",
-            json={"invite": "inv-race", "credential": credential},
-            headers=headers,
-        )
+        try:
+            results[key] = c.post(
+                "/auth/register/verify",
+                json={"invite": "inv-race", "credential": credential},
+                headers=headers,
+            )
+        except BaseException as exc:  # noqa: BLE001 — re-raised in the main thread
+            failures.append(exc)
+            barrier.abort()  # don't strand the other thread on the barrier
 
     t1 = threading.Thread(target=call, args=("r1", cred_a, {}))
     t2 = threading.Thread(target=call, args=("r2", cred_b, {"origin": ORIGIN}))
@@ -216,6 +224,8 @@ def test_invite_race_exactly_one_registration_succeeds(monkeypatch):
     t1.join()
     t2.join()
 
+    if failures:
+        raise failures[0]
     statuses = sorted([results["r1"].status_code, results["r2"].status_code])
     assert statuses == [200, 410]
     creds = repo._conn.execute(
@@ -976,6 +986,106 @@ def test_claim_first_user_concurrent_double_claim_exactly_one():
     assert len(losers) == 1
     assert repo.user_count() == 1
     assert repo.enrolled_count() == 1
+
+
+# ---------------------------------------------------------------------------
+# auth_repo: atomic invite redemption (invite + credential in one transaction)
+# ---------------------------------------------------------------------------
+
+
+def _invited_repo(token_hash="inv-hash"):
+    """A repo with one pending user holding one unused invite."""
+    repo = AuthRepository(":memory:")
+    repo.seed_users(["alice"])
+    uid = repo.get_user_by_name("alice")["id"]
+    repo.create_invite(token_hash, uid, 3600)
+    return repo, uid
+
+
+def test_redeem_invite_with_credential_enrols_and_burns_the_invite():
+    """The happy path: one call both spends the invite and writes the passkey,
+    and invalidates the challenges minted against that invite (so a stale
+    register challenge can't be replayed after redemption)."""
+    repo, uid = _invited_repo()
+    repo.store_challenge("chal", "register", 300, invite_token_hash="inv-hash")
+
+    assert repo.redeem_invite_with_credential(
+        "inv-hash", "cred-new", b"pk", 5, "internal"
+    ) is True
+
+    assert repo.get_valid_invite("inv-hash") is None
+    cred = repo.get_credential("cred-new")
+    assert cred is not None and cred["user_id"] == uid
+    assert cred["sign_count"] == 5 and cred["transports"] == "internal"
+    # The invite's outstanding challenge is dead too.
+    assert repo.consume_challenge("chal", "register") is False
+
+
+def test_redeem_invite_with_credential_refuses_a_spent_invite():
+    """The second redeemer loses — the route's 410 — and writes no credential."""
+    repo, uid = _invited_repo()
+    assert repo.redeem_invite_with_credential("inv-hash", "cred-a", b"pk", 0, None)
+
+    assert repo.redeem_invite_with_credential(
+        "inv-hash", "cred-b", b"pk", 0, None
+    ) is False
+    assert repo.get_credential("cred-b") is None
+    assert len(repo.credentials_for_user(uid)) == 1
+
+
+def test_redeem_invite_with_credential_rolls_back_and_leaves_invite_redeemable():
+    """THE LOCKOUT BUG. Spending the invite and writing the passkey used to be
+    two transactions: anything failing between them (crash, OOM kill, container
+    restart) burned the invite with no credential written, locking the invitee
+    out — unrecoverable without ``trug-doctor`` when they were the household's
+    route back in. Here the credential insert collides on a UNIQUE
+    credential_id partway through, and the whole unit rolls back: the invite is
+    still unused, no credential exists, and the same invite still enrols."""
+    repo, uid = _invited_repo()
+    repo._conn.execute(
+        "INSERT INTO credentials "
+        "(id, user_id, credential_id, public_key, sign_count, transports, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("c0", "ghost", "dupcred", b"pk", 0, None, "2020-01-01T00:00:00+00:00"),
+    )
+    repo._conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.redeem_invite_with_credential("inv-hash", "dupcred", b"pk", 0, None)
+
+    assert repo.get_valid_invite("inv-hash") is not None
+    assert repo.credentials_for_user(uid) == []
+    # And the invitee can simply retry with the same link.
+    assert repo.redeem_invite_with_credential("inv-hash", "cred-ok", b"pk", 0, None)
+    assert len(repo.credentials_for_user(uid)) == 1
+
+
+def test_register_verify_failure_leaves_the_invite_redeemable(monkeypatch):
+    """SEAMED, end-to-end: the same rollback seen through the route. A failing
+    credential write must not leave the invitee holding a spent invite and no
+    passkey."""
+    c, app = make_auth_client()
+    repo = app.state.auth_repo
+    alice_id = repo.get_user_by_name("alice")["id"]
+    repo.create_invite(hash_token("inv1"), alice_id, 3600)
+    repo.store_challenge("Q0hBTA", "register", 300)
+    repo._conn.execute(
+        "INSERT INTO credentials "
+        "(id, user_id, credential_id, public_key, sign_count, transports, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ("c0", "ghost", "AQIDBA", b"pk", 0, None, "2020-01-01T00:00:00+00:00"),
+    )
+    repo._conn.commit()
+    monkeypatch.setattr(authn, "verify_registration", fake_register())
+
+    with pytest.raises(sqlite3.IntegrityError):
+        c.post(
+            "/auth/register/verify",
+            json={"invite": "inv1", "credential": make_credential("Q0hBTA")},
+        )
+
+    assert repo.get_valid_invite(hash_token("inv1")) is not None
+    assert repo.credentials_for_user(alice_id) == []
 
 
 def test_delete_member_unless_last_enrolled_concurrent_last_two():

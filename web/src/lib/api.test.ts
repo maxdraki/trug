@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { api, setToken, getToken, ApiError } from './api';
+import { api, setToken, getToken, ApiError, probeAuthStatus, validateToken, REQUEST_TIMEOUT_MS } from './api';
 
 function jsonResponse(body: unknown, init: { status?: number; headers?: Record<string, string> } = {}) {
   const status = init.status ?? 200;
@@ -157,6 +157,63 @@ describe('api client', () => {
     [url, init] = fetchMock.mock.calls[1];
     expect(url).toBe('/auth/members/a%20b');
     expect(init.method).toBe('DELETE');
+  });
+
+  describe('hung requests', () => {
+    /** A fetch that never settles on its own — only the abort signal ends it. */
+    function hangingFetch() {
+      return vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
+          }),
+      );
+    }
+
+    it('aborts a request that never settles instead of waiting for ever', async () => {
+      // A restarted backend behind a proxy that holds the socket, a captive
+      // portal, iOS freezing an installed PWA: the promise never settles, so
+      // the op queue parks on it and every later tap is handed the same dead
+      // promise. A rejecting fetch self-heals; only a hang is fatal.
+      vi.useFakeTimers();
+      try {
+        fetchMock.mockImplementation(hangingFetch());
+        const settled = api.list().then(() => 'resolved' as const, (e) => e);
+        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+        const err = await settled;
+        expect(err).toBeInstanceOf(DOMException);
+        expect((err as DOMException).name).toBe('TimeoutError');
+        // Not an ApiError, so the store routes it down the offline path.
+        expect(err).not.toBeInstanceOf(ApiError);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the timeout once a request settles normally', async () => {
+      vi.useFakeTimers();
+      try {
+        fetchMock.mockResolvedValue(jsonResponse({ active: {}, checked: [] }));
+        await api.list();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a hung auth probe resolves rather than hanging the gate', async () => {
+      vi.useFakeTimers();
+      try {
+        fetchMock.mockImplementation(hangingFetch());
+        const status = probeAuthStatus();
+        const valid = validateToken('candidate');
+        await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS + 1);
+        expect(await status).toBe('error');
+        expect(await valid).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it('surfaces a non-2xx response as ApiError with .status', async () => {
