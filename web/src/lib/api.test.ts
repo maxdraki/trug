@@ -114,6 +114,53 @@ describe('api client', () => {
     expect(url).toBe('/api/catalog/top?n=24');
   });
 
+  it('forget DELETEs the catalog endpoint with the key as a query parameter', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(null, { status: 204 }));
+    await api.forget('marty rice');
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/catalog?name_norm=marty+rice');
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('forget rides out the unload only when the caller asks it to', async () => {
+    // The tray defers a forget for five seconds, so pocketing the phone inside
+    // that window means the request is made as the document is going away:
+    // without `keepalive` the browser cancels it along with the page and the
+    // shortcut survives, having been reported as forgotten. Everywhere else the
+    // option is left off — keepalive requests are capped and deprioritised, and
+    // an ordinary in-page forget wants neither.
+    fetchMock.mockResolvedValue(jsonResponse(null, { status: 204 }));
+    await api.forget('marty rice', { keepalive: true });
+    expect(fetchMock.mock.calls[0][1].keepalive).toBe(true);
+
+    await api.forget('papa dums');
+    expect(fetchMock.mock.calls[1][1].keepalive).toBeFalsy();
+  });
+
+  it('forget encodes every punctuation mark a catalogue key can hold', async () => {
+    // A key is never a path segment (a "/" in one is unroutable), so the only
+    // thing standing between "salt / pepper" and a permanent "Couldn't forget"
+    // is that these come back out of the query string byte-for-byte.
+    const cases: [string, string][] = [
+      ['salt / pepper', 'salt+%2F+pepper'], // slash — the defect
+      ['100% juice', '100%25+juice'], // percent — a bare % is an invalid escape
+      ['salt & vinegar', 'salt+%26+vinegar'], // ampersand — parameter separator
+      ["za'atar", 'za%27atar'], // apostrophe
+      ['7 + 7 bars', '7+%2B+7+bars'], // plus — would decode back to a space
+      ['item #4', 'item+%234'], // hash — a fragment delimiter
+      ['what? sauce', 'what%3F+sauce'], // question mark — starts the query
+      ['crème fraîche', 'cr%C3%A8me+fra%C3%AEche'], // non-ASCII, UTF-8 encoded
+    ];
+    for (const [key, encoded] of cases) {
+      fetchMock.mockResolvedValue(jsonResponse(null, { status: 204 }));
+      await api.forget(key);
+      const [url] = fetchMock.mock.calls.at(-1)!;
+      expect(url).toBe(`/api/catalog?name_norm=${encoded}`);
+      // And the encoding is reversible: what the server parses is the key.
+      expect(new URLSearchParams(new URL(url, 'http://x').search).get('name_norm')).toBe(key);
+    }
+  });
+
   it('listLlmModels POSTs the config and returns the model list', async () => {
     fetchMock.mockResolvedValue(
       jsonResponse({ models: ['gemini-3.6-flash', 'gemini-2.5-flash'] }),

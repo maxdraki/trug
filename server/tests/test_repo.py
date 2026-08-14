@@ -1,11 +1,47 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
+import trug.repo as repo_module
 from trug.normalise import tidy_name
+from trug.repo import STASH_WINDOW_SECONDS as _WINDOW
 from trug.repo import Repository
 
 
 @pytest.fixture
 def repo():
     return Repository(":memory:")
+
+
+class _Clock:
+    """A movable stand-in for the repository's wall clock, so a test can sit out
+    the stash window without sleeping through it."""
+
+    def __init__(self):
+        self.offset = 0.0
+
+    def advance(self, seconds: float) -> None:
+        self.offset += seconds
+
+    def now(self) -> str:
+        return (
+            datetime.now(timezone.utc) + timedelta(seconds=self.offset)
+        ).isoformat()
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = _Clock()
+    monkeypatch.setattr(repo_module, "_now", c.now)
+    return c
+
+
+def _catalog_rows(repo, name_norm: str) -> int:
+    """Raw row count for a key, stashed rows included — the one thing the public
+    surface deliberately cannot see."""
+    with repo._lock:
+        return repo._conn.execute(
+            "SELECT COUNT(*) AS n FROM catalog WHERE name_norm = ?", (name_norm,)
+        ).fetchone()["n"]
 
 
 @pytest.mark.parametrize(
@@ -620,3 +656,280 @@ def test_migration_makes_a_fresh_add_land_in_the_new_aisle(tmp_path):
     # The stale-catalogue row was the thing pinning re-adds to Cupboard.
     assert created is True
     assert (item["icon"], item["category"]) == ("salt", "Herbs & Spices")
+
+
+# --- deleting an item removes its catalogue row -------------------------
+
+
+def test_delete_removes_the_catalog_row_whatever_the_count(repo):
+    """Delete means "stop offering me this", full stop. A staple with a long
+    history is no exception: the shortcut goes now, and rebuilds from the next
+    shop."""
+    for _ in range(3):
+        item, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+        repo.set_status(item["id"], "checked")
+        repo.clear_checked()
+    last, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    assert repo.catalog_entry("milk")["times_added"] == 4
+
+    assert repo.delete_item(last["id"]) is True
+
+    assert repo.catalog_entry("milk") is None
+    assert [e["name_norm"] for e in repo.catalog_top()] == []
+
+
+def test_delete_removes_the_catalog_row_of_a_one_off(repo):
+    """The reported bug: a mis-heard capture added once must stop being offered
+    as a shortcut the moment it is deleted."""
+    item, _ = repo.add_item(None, "bag of tarragon", None, "ring", None)
+    assert repo.catalog_entry("bag of tarragon")["times_added"] == 1
+
+    repo.delete_item(item["id"])
+
+    assert repo.catalog_entry("bag of tarragon") is None
+    assert "bag of tarragon" not in repo.known_norms()
+    assert [e["name_norm"] for e in repo.catalog_top()] == []
+    assert repo.catalog_search("tarragon") == []
+
+
+def test_a_bad_capture_stays_gone_after_the_window(repo, clock):
+    """The bad-transcription case end to end: added once, deleted, invisible on
+    every surface — and it stays invisible once the revival window has passed
+    AND the stash has been reaped, with nothing re-adding it."""
+    item, _ = repo.add_item(None, "bag of tarragon", None, "ring", None)
+    repo.delete_item(item["id"])
+
+    clock.advance(_WINDOW + 60)
+    # Some unrelated add drives the purge; tarragon must not come back with it.
+    repo.add_item(None, "Milk", None, "pwa", "alice")
+
+    assert repo.catalog_entry("bag of tarragon") is None
+    assert "bag of tarragon" not in repo.known_norms()
+    assert [e["name_norm"] for e in repo.catalog_top()] == ["milk"]
+    assert repo.catalog_search("tarragon") == []
+    assert _catalog_rows(repo, "bag of tarragon") == 0
+
+
+def test_undo_inside_the_window_restores_the_history(repo):
+    """The headline case. A staple with 54 shops behind it, caught by a stray
+    swipe and undone straight away, must come back as the staple it was — not at
+    the bottom of the tray at times_added = 1. The re-add still counts as an add,
+    so the count comes back one higher, not one lower."""
+    for _ in range(53):
+        item, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+        repo.set_status(item["id"], "checked")
+        repo.clear_checked()
+    milk, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    before = repo.catalog_entry("milk")
+    assert before["times_added"] == 54
+
+    repo.delete_item(milk["id"])
+    assert repo.catalog_entry("milk") is None  # invisible the moment it goes
+
+    repo.add_item(None, "Milk", None, "pwa", "alice")  # the undo
+
+    after = repo.catalog_entry("milk")
+    assert after["times_added"] == 55
+    assert after["display_name"] == before["display_name"]
+    assert [e["name_norm"] for e in repo.catalog_top()] == ["milk"]
+
+
+def test_undo_restores_the_learned_icon_and_category(repo):
+    """Reviving the stash brings back what was LEARNED for the name, not just the
+    count — including enrichment the built-in map could never re-derive."""
+    item, _ = repo.add_item(None, "Marmite", None, "pwa", "alice")
+    repo.set_enrichment("marmite", "Marmite", "jar", "Cupboard")
+    assert repo.catalog_entry("marmite")["icon"] == "jar"
+
+    repo.delete_item(item["id"])
+    repo.add_item(None, "Marmite", None, "pwa", "alice")  # the undo
+
+    entry = repo.catalog_entry("marmite")
+    assert (entry["icon"], entry["category"]) == ("jar", "Cupboard")
+
+
+def test_a_readd_after_the_window_starts_a_fresh_row(repo, clock):
+    """Past the window the delete is final: the same name added again is a new
+    shortcut starting at one, with the learned enrichment gone with the stash."""
+    item, _ = repo.add_item(None, "Marmite", None, "pwa", "alice")
+    repo.set_enrichment("marmite", "Marmite", "jar", "Cupboard")
+    for _ in range(4):
+        repo.set_status(item["id"], "checked")
+        repo.clear_checked()
+        item, _ = repo.add_item(None, "Marmite", None, "pwa", "alice")
+    assert repo.catalog_entry("marmite")["times_added"] == 5
+
+    repo.delete_item(item["id"])
+    clock.advance(_WINDOW + 1)
+    repo.add_item(None, "Marmite", None, "pwa", "alice")
+
+    entry = repo.catalog_entry("marmite")
+    assert entry["times_added"] == 1
+    assert entry["icon"] is None and entry["category"] is None
+
+
+def test_a_stash_is_still_revivable_at_the_edge_of_the_window(repo, clock):
+    """The purge may never take a row someone can still revive: a stash one
+    second inside the window survives an intervening purge-driving add."""
+    milk, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    repo.delete_item(milk["id"])
+
+    clock.advance(_WINDOW - 1)
+    repo.add_item(None, "Bread", None, "pwa", "alice")  # drives the purge
+    repo.add_item(None, "Milk", None, "pwa", "alice")  # the late undo
+
+    assert repo.catalog_entry("milk")["times_added"] == 2
+
+
+def test_the_purge_reaps_stashes_past_the_window(repo, clock):
+    """Housekeeping: a stash nobody revived does not sit in the table forever."""
+    item, _ = repo.add_item(None, "Kombucha", None, "pwa", "alice")
+    repo.delete_item(item["id"])
+    assert _catalog_rows(repo, "kombucha") == 1  # stashed, not yet gone
+
+    clock.advance(_WINDOW + 1)
+    repo.add_item(None, "Milk", None, "pwa", "alice")
+
+    assert _catalog_rows(repo, "kombucha") == 0
+
+
+def test_a_stashed_row_does_not_fold_new_names_onto_itself(repo, clock):
+    """``known_norms`` feeds the singular/plural fold, so a stash must not exert
+    gravity while it is invisible. Delete "Lemon" and adding "Lemons" is a plain
+    new shortcut under its own key — folding it onto the deleted "lemon" would
+    revive, under a name the shopper believes they got rid of, a row they cannot
+    see to reason about. The undo path is unaffected: it re-adds the same display
+    name, which normalises to the same key without any fold."""
+    lemon, _ = repo.add_item(None, "Lemon", None, "pwa", "alice")
+    repo.delete_item(lemon["id"])
+
+    assert "lemon" not in repo.known_norms()
+    plural, _ = repo.add_item(None, "Lemons", None, "pwa", "alice")
+
+    assert repo.catalog_entry("lemons")["times_added"] == 1
+    assert repo.catalog_entry("lemon") is None
+    # ...and the stash is still just a stash: it ages out on its own.
+    clock.advance(_WINDOW + 1)
+    repo.add_item(None, "Bread", None, "pwa", "alice")
+    assert _catalog_rows(repo, "lemon") == 0
+
+
+def test_existing_db_gains_the_stash_column_and_keeps_its_shortcuts(tmp_path):
+    """A live household's DB predates retired_at, and CREATE TABLE IF NOT EXISTS
+    will not add it. The migration must, without disturbing rows that were never
+    deleted — and the stash must work on the upgraded DB."""
+    import sqlite3
+
+    dbfile = tmp_path / "pre-stash.db"
+    conn = sqlite3.connect(str(dbfile))
+    conn.executescript(_OLD_SCHEMA)
+    conn.execute(
+        "CREATE TABLE catalog (name_norm TEXT PRIMARY KEY, display_name TEXT NOT NULL, "
+        "icon TEXT, category TEXT, times_added INTEGER NOT NULL DEFAULT 0, last_added TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO catalog (name_norm, display_name, times_added, last_added) "
+        "VALUES ('milk', 'Milk', 54, '2026-08-01T00:00:00+00:00')"
+    )
+    conn.commit()
+    conn.close()
+
+    repo = Repository(str(dbfile))
+    assert repo.catalog_entry("milk")["times_added"] == 54
+
+    item, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    repo.delete_item(item["id"])
+    assert repo.catalog_entry("milk") is None
+    repo.add_item(None, "Milk", None, "pwa", "alice")  # the undo
+    assert repo.catalog_entry("milk")["times_added"] == 56
+
+    # Idempotent: a second open of the same file finds the column already there.
+    assert Repository(str(dbfile)).catalog_entry("milk")["times_added"] == 56
+
+
+def test_forget_is_permanent_and_not_revivable(repo):
+    """``forget_catalog`` means "this name is WRONG", not "not now" — there is no
+    undo affordance behind it, so it hard-deletes and a later add of the same
+    name re-learns from scratch rather than reviving anything."""
+    item, _ = repo.add_item(None, "Marty Rice", None, "ring", None)
+    repo.set_enrichment("marty rice", "Marty Rice", "jar", "Cupboard")
+    for _ in range(3):
+        repo.set_status(item["id"], "checked")
+        repo.clear_checked()
+        item, _ = repo.add_item(None, "Marty Rice", None, "ring", None)
+    assert repo.catalog_entry("marty rice")["times_added"] == 4
+    repo.set_status(item["id"], "checked")
+    repo.clear_checked()  # nothing on the list, so the re-add below is a real add
+
+    assert repo.forget_catalog("marty rice") is True
+    assert _catalog_rows(repo, "marty rice") == 0  # gone, not stashed
+
+    repo.add_item(None, "Marty Rice", None, "ring", None)
+    entry = repo.catalog_entry("marty rice")
+    assert entry["times_added"] == 1
+    # Re-learned from the built-in map, not restored from the forgotten row.
+    assert entry["icon"] == "bowl" != "jar"
+
+
+def test_forget_also_reaps_a_stash(repo):
+    """Forgetting a name that is currently stashed makes it permanent
+    immediately, rather than leaving a revivable row behind."""
+    item, _ = repo.add_item(None, "Marty Rice", None, "ring", None)
+    repo.delete_item(item["id"])
+
+    assert repo.forget_catalog("marty rice") is True
+
+    repo.add_item(None, "Marty Rice", None, "ring", None)
+    assert repo.catalog_entry("marty rice")["times_added"] == 1
+
+
+def test_undo_of_a_removed_row_relearns_the_builtin_icon(repo):
+    """Removing the row loses the learned icon/category. For a name the built-in
+    map knows, the undo's re-add re-learns it, so the round trip is complete."""
+    item, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    assert (item["icon"], item["category"]) == ("milk", "Dairy & Eggs")
+    repo.delete_item(item["id"])
+    again, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    assert (again["icon"], again["category"]) == ("milk", "Dairy & Eggs")
+    entry = repo.catalog_entry("milk")
+    assert (entry["icon"], entry["category"]) == ("milk", "Dairy & Eggs")
+
+
+def test_delete_of_a_checked_item_removes_the_row_too(repo):
+    """Per-row delete means "I did not mean this" whatever the row's status —
+    otherwise a bad capture that happened to get checked off could never be
+    purged. The bulk basket clear is the "I bought these" gesture, and it is the
+    one that leaves the catalogue alone (see below)."""
+    item, _ = repo.add_item(None, "Milk", None, "pwa", "alice")
+    repo.set_status(item["id"], "checked")
+    repo.delete_item(item["id"])
+    assert repo.catalog_entry("milk") is None
+
+
+def test_clear_checked_never_touches_the_catalog(repo):
+    """Emptying the basket is "I have bought all of these" — the opposite of a
+    delete. It must leave every count and last_added exactly as it found them."""
+    for name in ("Milk", "Eggs", "Bread"):
+        item, _ = repo.add_item(None, name, None, "pwa", "alice")
+        repo.set_status(item["id"], "checked")
+    before = {e["name_norm"]: dict(e) for e in repo.catalog_top()}
+    assert repo.clear_checked() == 3
+    after = {e["name_norm"]: dict(e) for e in repo.catalog_top()}
+    assert after == before
+
+
+def test_deleting_same_norm_rows_twice_is_harmless(repo):
+    """Two list rows can share a norm (a legacy duplicate, or a re-add from
+    another device racing an SSE echo). The first delete takes the catalogue row;
+    the second finds nothing to take and still reports the item deleted."""
+    repo.add_item(None, "Milk", None, "pwa", "alice")
+    with repo._lock:
+        repo._conn.execute(
+            "INSERT INTO items (id, name, name_norm, status, created_at) "
+            "VALUES ('dupe', 'Milk', 'milk', 'active', '2020-01-01T00:00:00+00:00')"
+        )
+        repo._conn.commit()
+    item_ids = [i["id"] for i in repo.list_items()["active"]]
+    assert [repo.delete_item(i) for i in item_ids] == [True, True]
+    assert repo.catalog_entry("milk") is None
+    assert repo.list_items()["active"] == []

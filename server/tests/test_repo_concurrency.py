@@ -147,6 +147,8 @@ def test_repo_takes_the_lock_for_every_connection_use(tmp_path):
     repo.catalog_top()
     repo.catalog_search("lem")
     repo.set_enrichment("lemons", "Lemons", "lemon", "Fruit & Veg")
+    repo.forget_catalog("nothing under this key")  # miss
+    repo.forget_catalog("lemons")  # hit
     repo.clear_checked()
     repo.delete_item(item["id"])
 

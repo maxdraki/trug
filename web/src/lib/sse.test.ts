@@ -60,13 +60,16 @@ describe('connectEvents', () => {
     vi.unstubAllGlobals();
   });
 
-  it('opens /api/events with the token and registers the four listeners', () => {
+  it('opens /api/events with the token and registers every frame the app reads', () => {
     const onEvent = vi.fn();
     connectEvents(onEvent, () => 'tok-1');
 
     expect(MockEventSource.instances).toHaveLength(1);
     expect(MockEventSource.last.url).toBe('/api/events?token=tok-1');
     expect([...MockEventSource.last.listeners.keys()].sort()).toEqual([
+      // Not a list change — the store ignores it. It is here so the recents
+      // tray hears that a shortcut was forgotten on another device.
+      'catalog_forgotten',
       'item_added',
       'item_removed',
       'item_updated',

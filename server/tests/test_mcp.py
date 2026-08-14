@@ -262,10 +262,12 @@ def test_remove_item_not_found():
 
 def test_suggest_excludes_active():
     c = make_client()
-    # Build catalog history, then clear the list so entries are "not active".
+    # Build catalog history the way a shop does: add, then check off. (Not
+    # remove_item — a delete drops the catalogue row outright, so it takes the
+    # entry back out of the history these suggestions come from.)
     call(c, "add_items", {"items": [{"name": "coffee"}, {"name": "bread"}]})
-    call(c, "remove_item", {"name_or_id": "coffee"})
-    call(c, "remove_item", {"name_or_id": "bread"})
+    call(c, "check_item", {"name_or_id": "coffee"})
+    call(c, "check_item", {"name_or_id": "bread"})
     # Re-add coffee so it IS active; it must be excluded from suggestions.
     call(c, "add_items", {"items": [{"name": "coffee"}]})
     result = call(c, "suggest_from_history")
@@ -277,11 +279,21 @@ def test_suggest_excludes_active():
 def test_suggest_hint_filters():
     c = make_client()
     call(c, "add_items", {"items": [{"name": "coffee"}, {"name": "bread"}]})
-    call(c, "remove_item", {"name_or_id": "coffee"})
-    call(c, "remove_item", {"name_or_id": "bread"})
+    call(c, "check_item", {"name_or_id": "coffee"})
+    call(c, "check_item", {"name_or_id": "bread"})
     result = call(c, "suggest_from_history", {"hint": "cof"})
     names = {s["display_name"] for s in result["structuredContent"]["suggestions"]}
     assert names == {"Coffee"}
+
+
+def test_removed_item_stops_being_suggested():
+    """remove_item is the agent's "I did not mean this", so it drops the
+    catalogue row — the name leaves the suggestion history entirely."""
+    c = make_client()
+    call(c, "add_items", {"items": [{"name": "bag of tarragon"}]})
+    call(c, "remove_item", {"name_or_id": "bag of tarragon"})
+    result = call(c, "suggest_from_history")
+    assert result["structuredContent"]["suggestions"] == []
 
 
 def test_suggest_has_ttl_meta():

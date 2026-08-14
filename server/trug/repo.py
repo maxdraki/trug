@@ -1,6 +1,6 @@
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import uuid6
@@ -31,9 +31,28 @@ CREATE TABLE IF NOT EXISTS catalog (
     icon TEXT,
     category TEXT,
     times_added INTEGER NOT NULL DEFAULT 0,
-    last_added TEXT
+    last_added TEXT,
+    retired_at TEXT
 );
 """
+
+# How long a deleted name's catalogue row stays STASHED — invisible everywhere,
+# but revivable by re-adding the same name.
+#
+# The undo toast is five seconds, and five seconds would cover the reported bug
+# exactly. It is the wrong number all the same: the shopper who swipes Milk off,
+# carries on adding, and only two minutes later thinks "hang on, we do need
+# milk" has precisely the same expectation — they did not intend to throw away
+# 54 shops of history, and the interface never told them they had. An hour is
+# the shape of that intent: it covers a whole shopping trip or a whole
+# add-things-to-the-list sitting, so a correction made in the same breath as the
+# mistake always lands, while a name that comes back next Saturday is a genuine
+# new decision and starts a genuinely new shortcut. Nothing user-facing counts
+# the seconds down, so a boundary the shopper can feel matters more than a tight
+# one; the only cost of being generous is that a deliberate delete-then-re-add
+# within the hour keeps history the shopper may have wanted reset — and the
+# gesture for "this name is wrong" is forget_catalog, which is permanent.
+STASH_WINDOW_SECONDS = 3600
 
 _ITEM_COLUMNS = (
     "id", "name", "note", "icon", "category",
@@ -117,11 +136,30 @@ class Repository:
                     (_epoch(row["created_at"]), row["id"]),
                 )
             self._conn.commit()
+        self._migrate_catalog_retired_at()
         self._tidy_existing_names()
         self._collapse_duplicates()
         self._migrate_nut_icon()
         self._migrate_coconut_milk_icon()
         self._migrate_builtin_map_refile()
+
+    def _migrate_catalog_retired_at(self) -> None:
+        """Add catalog.retired_at to DBs created before the stash existed.
+
+        NULL is exactly the right value for every pre-existing row — none of
+        them was deleted — so there is nothing to backfill. Must run before any
+        query that mentions the column; ``CREATE TABLE IF NOT EXISTS`` leaves an
+        existing table's columns alone, so a live household's DB reaches here
+        without it. Idempotent: the second run sees the column and does nothing.
+        """
+        with self._lock:
+            cols = {
+                row["name"]
+                for row in self._conn.execute("PRAGMA table_info(catalog)")
+            }
+            if "retired_at" not in cols:
+                self._conn.execute("ALTER TABLE catalog ADD COLUMN retired_at TEXT")
+                self._conn.commit()
 
     def _builtin(self, name_norm: str) -> tuple[str, str] | None:
         """Tier 0 for ``name_norm``: ``(icon_slug, category)`` or ``None``.
@@ -405,17 +443,60 @@ class Repository:
             return self._row_to_item(row), True
 
     def _bump_catalog(self, name_norm: str, display_name: str) -> None:
-        """Assumes the caller already holds ``self._lock`` and will commit —
+        """Count an add against the catalogue, REVIVING a stashed row if this
+        name was deleted inside the stash window.
+
+        Revival is the whole trick, and it is the ``ON CONFLICT`` clause doing
+        it: the stale-stash purge runs first, so by the time the upsert lands a
+        row under this key either is a live shortcut, or is a stash still inside
+        its window, or does not exist. The first two take the UPDATE branch —
+        which clears ``retired_at``, so a stash returns with its count, its
+        learned icon and its category intact — and the third inserts fresh at
+        one. No branch in Python, and no window where a row is half-revived.
+
+        The revived count goes UP by one, not back to what it was: the re-add
+        really is an add, and nothing here can tell an undo from a shopper
+        deciding two minutes later that they do want milk after all. Over 54
+        shops the difference is noise; what the shopper actually notices —
+        Milk staying at the top of the tray — is exact.
+
+        Assumes the caller already holds ``self._lock`` and will commit —
         deliberately not a locked/committing method of its own so it can be part
         of a caller's larger atomic unit (see add_item)."""
         now = _now()
+        self._purge_stale_stashes(now)
         self._conn.execute(
             "INSERT INTO catalog "
             "(name_norm, display_name, times_added, last_added) "
             "VALUES (?, ?, 1, ?) "
             "ON CONFLICT(name_norm) DO UPDATE SET "
-            "times_added = times_added + 1, last_added = excluded.last_added",
+            "times_added = times_added + 1, last_added = excluded.last_added, "
+            "retired_at = NULL",
             (name_norm, display_name, now),
+        )
+
+    def _purge_stale_stashes(self, now: str) -> None:
+        """Drop stashed catalogue rows whose window has passed.
+
+        Housekeeping only — every read already filters ``retired_at IS NULL``,
+        so a row that outlives its purge is invisible either way. What the purge
+        buys is that the window ENDS: past it, ``_bump_catalog``'s upsert finds
+        no row and inserts a fresh one at count one, which is what "the delete
+        was final" has to mean.
+
+        It cannot reap a row someone is about to revive. The cutoff is strict
+        (``<``), and purge and revival run inside one lock hold off one ``now``,
+        so a row inside its window at the moment of the check is still inside it
+        at the moment of the upsert — there is no instant in between for another
+        thread to take it.
+
+        Same contract as _bump_catalog: caller holds the lock and commits."""
+        cutoff = (
+            datetime.fromisoformat(now) - timedelta(seconds=STASH_WINDOW_SECONDS)
+        ).isoformat()
+        self._conn.execute(
+            "DELETE FROM catalog WHERE retired_at IS NOT NULL AND retired_at < ?",
+            (cutoff,),
         )
 
     def get_item(self, item_id: str) -> dict | None:
@@ -453,14 +534,76 @@ class Repository:
         return self._row_to_item(row) if row is not None else None
 
     def delete_item(self, item_id: str) -> bool:
+        """Delete an item and RETIRE its catalogue row, whatever the count.
+        Delete means "stop offering me this", full stop.
+
+        The earlier version was cleverer: it decremented ``times_added`` and only
+        dropped the row at zero, on the theory that deleting undoes one add and a
+        staple should keep its history. That failed the first time it met a real
+        user. They added a thing from the shortcut tray (count 1 → 2), swiped it
+        off the list (2 → 1), and the shortcut was still sitting there. From
+        where they sit they deleted it and it came back — and the original ask
+        was exactly "when I delete an item it shouldn't appear in favourites any
+        more, it might have been a bad transcription". A rule you have to explain
+        with a counter loses to one you can see working.
+
+        The row is STASHED rather than dropped: ``retired_at`` is stamped and
+        every read filters it out, so the shortcut vanishes from the tray, from
+        typeahead and from the MCP suggestions the instant the item goes — the
+        original ask, unchanged, because invisible is invisible whatever is left
+        on disk. What the stash buys is the swipe-delete's five-second undo,
+        which re-adds by name through the normal add path: without it a stray
+        swipe on Milk, caught and undone immediately, restored the item but
+        silently dropped 54 shops of history to a fresh row at one, sending a
+        staple to the bottom of the tray for weeks. An undo that presents as a
+        full reversal and is not is worse than no undo. ``_bump_catalog`` revives
+        a stash inside STASH_WINDOW_SECONDS; past that the purge takes it and the
+        delete is final.
+
+        Retiring is not decrementing. The count is untouched, so nothing here
+        depends on a delete being the mirror of an add — the mistake the earlier
+        version made.
+
+        The rule applies whatever the row's STATUS. A per-row delete is a
+        deliberate "get rid of this", and scoping it to active rows would leave a
+        bad capture that happened to get checked off with no way to purge it at
+        all. The "I bought these" gesture is ``clear_checked``, which empties the
+        whole basket and deliberately touches nothing here.
+
+        What this CANNOT reach is a name with no item row left at all — the
+        ``name_norm`` is read off the item, so once the last one has been
+        cleared away the shortcut can only be dropped by ``forget_catalog``.
+
+        Once the stash ages out, the icon/category learned for that name goes
+        with it; a later add re-learns from the built-in map (add_item's tier 0)
+        or the LLM.
+
+        The item delete and the catalogue retirement are one atomic unit: one
+        lock hold, one commit. The piggy-backed purge rides the same unit —
+        every delete is also the moment to sweep up stashes nobody came back
+        for, which bounds the table to names deleted within the last hour
+        without needing a timer anywhere.
+        """
         with self._lock:
-            cur = self._conn.execute(
-                "DELETE FROM items WHERE id = ?", (item_id,)
+            row = self._conn.execute(
+                "SELECT name_norm FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            now = _now()
+            self._conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+            self._purge_stale_stashes(now)
+            self._conn.execute(
+                "UPDATE catalog SET retired_at = ? WHERE name_norm = ?",
+                (now, row["name_norm"]),
             )
             self._conn.commit()
-            return cur.rowcount > 0
+            return True
 
     def clear_checked(self) -> int:
+        """Empty the basket. Emphatically NOT a delete in the catalogue sense:
+        this is "I have bought all of these", so every times_added and last_added
+        is left exactly as it was (a test pins that)."""
         with self._lock:
             cur = self._conn.execute(
                 "DELETE FROM items WHERE status = 'checked'"
@@ -483,14 +626,33 @@ class Repository:
     # --- catalog -------------------------------------------------------
 
     def known_norms(self) -> set[str]:
+        """The live catalogue keys — stashed ones deliberately excluded.
+
+        These feed ``normalise``'s singular/plural fold, which only ever moves a
+        name onto a key the catalogue already holds. A stash must not be one of
+        those keys: leaving it in would let "Lemons", added an hour after the
+        shopper deleted "Lemon", fold onto the deleted key and quietly revive it
+        — a shortcut reappearing under a name they believe they got rid of,
+        pulled there by a row no surface will show them. Naming behaviour has to
+        be explicable from what is on screen.
+
+        This does not weaken the undo, which is the case the stash exists for:
+        undo re-adds the same display name, so it normalises to the same key
+        with no fold involved and hits the stash head-on.
+        """
         with self._lock:
-            rows = self._conn.execute("SELECT name_norm FROM catalog").fetchall()
+            rows = self._conn.execute(
+                "SELECT name_norm FROM catalog WHERE retired_at IS NULL"
+            ).fetchall()
         return {row["name_norm"] for row in rows}
 
     def catalog_entry(self, name_norm: str) -> dict | None:
+        """The live shortcut for a name, or None — a stashed row reads as absent
+        exactly like a deleted one, so no caller can offer what was deleted."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM catalog WHERE name_norm = ?", (name_norm,)
+                "SELECT * FROM catalog WHERE name_norm = ? AND retired_at IS NULL",
+                (name_norm,),
             ).fetchone()
         return dict(row) if row is not None else None
 
@@ -505,7 +667,9 @@ class Repository:
 
     def catalog_top(self, n: int = 24) -> list[dict]:
         with self._lock:
-            rows = self._conn.execute("SELECT * FROM catalog").fetchall()
+            rows = self._conn.execute(
+                "SELECT * FROM catalog WHERE retired_at IS NULL"
+            ).fetchall()
         return self._rank(rows)[:n]
 
     def catalog_search(self, q: str, limit: int = 8) -> list[dict]:
@@ -513,7 +677,7 @@ class Repository:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT * FROM catalog "
-                "WHERE name_norm LIKE ? OR display_name LIKE ?",
+                "WHERE retired_at IS NULL AND (name_norm LIKE ? OR display_name LIKE ?)",
                 (pattern, pattern),
             ).fetchall()
         now = datetime.now(timezone.utc)
@@ -542,3 +706,47 @@ class Repository:
                 (display_name, icon, category, name_norm),
             )
             self._conn.commit()
+
+    def forget_catalog(self, name_norm: str) -> bool:
+        """Drop a shortcut from the catalogue. True if a row went, False if
+        there was nothing under that key.
+
+        The gesture behind this is "stop offering me that": a mis-heard capture
+        ("Marty Rice" for basmati rice) is catalogued the moment it is added,
+        and until this existed nothing could take it back out. ``delete_item``
+        does clear the shortcut, but it needs an item row to hang that delete
+        on — it looks the ``name_norm`` up FROM the item. Status is irrelevant
+        (it works on a checked row just as well as an active one); EXISTENCE is
+        not. Once every item with that name has been bought and cleared away,
+        there is no row left to delete and the bad shortcut is stranded for
+        good. This is the way back in.
+
+        Deliberately touches ITEMS not at all — the mirror image of
+        ``delete_item``, which takes both. A shortcut and a thing in the
+        trolley are different objects that happen to share a name: forgetting
+        the "Papa Dums" shortcut while poppadoms are genuinely on this week's
+        list must not delete the row the shopper is about to buy. The whole row goes,
+        learned icon/category and count together — this is "this name is wrong",
+        so adding the name again re-learns from scratch, which is the point.
+
+        HARD delete, deliberately, where ``delete_item`` stashes. The two
+        gestures mean different things: swiping an item off the list is about
+        this week's trolley and comes with a five-second undo, so its catalogue
+        row is worth keeping warm; forgetting a shortcut is a considered "this
+        name is wrong", made from the tray, with no undo behind it and no
+        history worth preserving. Retiring it with a never-revive flag would
+        reach the same place by carrying a second kind of tombstone through
+        every read, the revive branch and the purge — three places to get the
+        permanence wrong. Deleting the row is the permanence, and there is
+        nothing left to be wrong about. It also reaps a row that is currently
+        stashed, so forgetting during the undo window makes the name permanent
+        immediately rather than leaving something revivable behind.
+
+        Single statement, so the lock hold and the commit are all it needs.
+        """
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM catalog WHERE name_norm = ?", (name_norm,)
+            )
+            self._conn.commit()
+            return cur.rowcount > 0

@@ -17,7 +17,16 @@
  * connection attempt behind a 30s delay.
  */
 
-const EVENT_NAMES = ['item_added', 'item_updated', 'item_removed', 'list_cleared'] as const;
+const EVENT_NAMES = [
+  'item_added',
+  'item_updated',
+  'item_removed',
+  'list_cleared',
+  // Not a list change at all — the store ignores it. It exists so a device
+  // showing the "Frequently added" tray learns that a shortcut was forgotten
+  // somewhere else, instead of offering it until the next reload.
+  'catalog_forgotten',
+] as const;
 
 const BACKOFF_START_MS = 1_000;
 const BACKOFF_CAP_MS = 30_000;

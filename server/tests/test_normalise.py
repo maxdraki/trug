@@ -69,6 +69,25 @@ def test_nothing_folds_without_a_known_counterpart():
     assert normalise("", known={"s"}) == ""
 
 
+def test_punctuation_is_carried_through_untouched():
+    """Apostrophes and hyphens are part of the key: normalise lowercases and
+    collapses whitespace and does nothing else. Names like "za'atar" and
+    "washing-up liquid" must survive intact so the icon map (whose keys carry
+    the same punctuation) can find them, and the plural fold must not trip
+    over the punctuation either."""
+    from trug.icons import lookup
+
+    assert normalise("  Za'atar ") == "za'atar"
+    assert normalise("Washing-Up Liquid") == "washing-up liquid"
+    assert lookup(normalise("Za'atar")) == lookup("za'atar") is not None
+    assert lookup(normalise("Washing-Up Liquid"))[1] == "Household"
+    # The folds still behave: exact catalogue hit wins, plural folds on.
+    assert normalise("za'atar", known={"za'atar"}) == "za'atar"
+    assert normalise("chapatis", known={"chapati"}) == "chapati"
+    # …and a punctuated name with no counterpart is left alone.
+    assert normalise("za'atar", known={"zaatar"}) == "za'atar"
+
+
 def test_normalise_is_pure_and_leaves_known_untouched():
     known = {"lemons"}
     snapshot = set(known)
