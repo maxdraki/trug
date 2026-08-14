@@ -867,8 +867,9 @@ def test_forget_is_permanent_and_not_revivable(repo):
     repo.add_item(None, "Marty Rice", None, "ring", None)
     entry = repo.catalog_entry("marty rice")
     assert entry["times_added"] == 1
-    # Re-learned from the built-in map, not restored from the forgotten row.
-    assert entry["icon"] == "bowl" != "jar"
+    # Re-learned from the built-in map rather than restored: the forgotten row
+    # carried "jar", and a forget takes the learned icon with it.
+    assert entry["icon"] == "bowl"
 
 
 def test_forget_also_reaps_a_stash(repo):
