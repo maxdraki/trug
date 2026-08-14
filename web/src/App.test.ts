@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/svelte';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import App from './App.svelte';
 import { clearSnapshot } from './lib/snapshot';
 
@@ -180,6 +180,143 @@ describe('App auth-gated live-sync', () => {
     await waitFor(() => expect(connectEvents).toHaveBeenCalled());
     await waitFor(() => expect(bootstrapState).toHaveBeenCalled());
     expect(screen.queryByText(/this instance has no owner yet/i)).toBeNull();
+  });
+});
+
+describe('App recents tray recovery', () => {
+  function shelfItem(name: string): Record<string, unknown> {
+    return {
+      id: `id-${name}`,
+      name,
+      note: null,
+      icon: null,
+      category: null,
+      status: 'active',
+      source: 'pwa',
+      added_by: null,
+      created_at: '2026-08-09T10:00:00Z',
+      checked_at: null,
+      sort_key: 1,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearSnapshot();
+    storeMock = makeStore();
+    // The tray is suppressed on a completely empty shelf, so it needs a row to
+    // render at all.
+    storeMock.groups = [{ category: 'Cupboard', items: [shelfItem('Coffee')] }];
+    getToken.mockReturnValue('tok');
+    probeAuthStatus.mockResolvedValue('ok');
+    consumeUrlTokenError.mockReturnValue(false);
+    bootstrapState.mockResolvedValue({ claimable: false });
+    apiSearch.mockResolvedValue([]);
+    apiList.mockResolvedValue({ items: [] });
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+    // @ts-expect-error test double for jsdom global
+    globalThis.EventSource = vi.fn();
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: false, status: 401 } as Response),
+    ) as unknown as typeof fetch;
+  });
+
+  it('refetches the catalogue on the FIRST stream connect, so a failed mount fetch recovers', async () => {
+    // Launched with no signal: the tray's mount fetch fails and the tray is
+    // blank. The first connect is precisely the moment the network arrived —
+    // and it was the one connect that skipped the refetch, so the tray stayed
+    // empty for the rest of the session unless an add or a delete happened.
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    apiTop.mockRejectedValueOnce(new Error('offline')).mockResolvedValue([]);
+    render(App);
+
+    await waitFor(() => expect(connectEvents).toHaveBeenCalled());
+    await waitFor(() => expect(apiTop).toHaveBeenCalledTimes(1));
+
+    const onConnect = connectEvents.mock.calls[0][2] as () => void;
+    onConnect();
+    await waitFor(() => expect(apiTop).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    err.mockRestore();
+  });
+
+  /* Which frames may have moved the catalogue, and how many refetches a burst
+     of them costs. Both halves were unpinned: deleting the whole "only these
+     three events" test left the suite green, and so did removing the
+     coalescing so that every frame bumped. */
+
+  /** The shell's own onEvent, as the SSE stream calls it. */
+  function streamEvents(): (name: string, data?: unknown) => void {
+    return connectEvents.mock.calls[0][0] as (name: string, data?: unknown) => void;
+  }
+
+  /** Render, and wait for the tray's mount fetch — the baseline every count
+   *  below is measured from. */
+  async function shellUp() {
+    render(App);
+    await waitFor(() => expect(connectEvents).toHaveBeenCalled());
+    await waitFor(() => expect(apiTop).toHaveBeenCalledTimes(1));
+    // Fake timers only now: swapped in before render they would freeze the
+    // clock the mount path itself is waiting on. Everything from here is
+    // driven by advancing them, so the second the coalescing window is meant
+    // to be is asserted rather than slept through.
+    vi.useFakeTimers();
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('costs one refetch for a burst of adds, not one each', async () => {
+    // A ring capture lands five names in a couple of seconds, and each one is
+    // its own frame. Un-coalesced that is five catalogue GETs from a phone in a
+    // carpark for a change the tray could not tell apart from one.
+    await shellUp();
+    const onEvent = streamEvents();
+    // Spread across the window rather than fired in one breath: five frames in
+    // a single synchronous batch collapse into one effect run whatever the
+    // shell does, so that arrangement cannot tell coalescing from its absence.
+    // A ring capture arrives the way this does — a name at a time, as they are
+    // transcribed.
+    for (const name of ['Lemon', 'Tuna', 'Coconut Milk', 'Coffee', 'Bananas']) {
+      onEvent('item_added', { id: `id-${name}`, name, source: 'pwa' });
+      await vi.advanceTimersByTimeAsync(200);
+    }
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(apiTop).toHaveBeenCalledTimes(2);
+    // …and the window does not go on bumping after it has closed.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(apiTop).toHaveBeenCalledTimes(2);
+  });
+
+  it('costs nothing at all to check things off', async () => {
+    // The promise this is: a check-off is the most repeated gesture in the app
+    // and it cannot change the catalogue — neither can an edit, an uncheck, or
+    // clearing the basket. Any of them bumping the revision would put a request
+    // behind every tap of the walk round the shop.
+    await shellUp();
+    const onEvent = streamEvents();
+    for (let i = 0; i < 5; i += 1) {
+      onEvent('item_updated', { id: `id-${i}`, status: 'checked' });
+    }
+    onEvent('list_cleared', { cleared: 5 });
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(apiTop).toHaveBeenCalledTimes(1);
+  });
+
+  it('refetches when a dropped stream comes back', async () => {
+    // The stream carries nothing that happened while it was down, so a
+    // reconnect is a moment the tray may be out of date — through the same
+    // coalescing window as everything else.
+    await shellUp();
+    const onConnect = connectEvents.mock.calls[0][2] as () => void;
+    onConnect();
+
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(apiTop).toHaveBeenCalledTimes(2);
   });
 });
 

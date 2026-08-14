@@ -181,9 +181,15 @@ TOOLS = [
     {
         "name": "remove_item",
         "description": (
-            "Remove an item from the list entirely. Matches by id or fuzzy name "
-            "against any item (active or checked). Returns what was removed, or a "
-            "clear not-found."
+            "Delete an item AND permanently forget that name's shortcut history "
+            "— its learned icon, aisle and how often the household buys it. "
+            "There is no undo. Use this only for a name that should stop being "
+            "offered at all (a bad transcription, something bought by mistake). "
+            "If the household has simply BOUGHT the thing, call check_item "
+            "instead: tidying a list with remove_item silently erases staples "
+            "from the history the shortcut tray is built on. Matches by id or "
+            "fuzzy name against any item (active or checked). Returns what was "
+            "removed, or a clear not-found."
         ),
         "inputSchema": {
             "type": "object",

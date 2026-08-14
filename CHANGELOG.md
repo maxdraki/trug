@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-14
+
+### Added
+
+- **You can forget a shortcut.** "Frequently added" only ever grew, so a mis-heard voice capture —
+  "Marty Rice" for basmati rice, "Papa Dums" for poppadoms — was offered forever with no way to
+  stop it. Hold a shortcut on a phone, right-click it on a desktop, or press Delete on a focused
+  one, and it goes, with five seconds to undo. Nothing is sent to the server until that window
+  closes, so undo cannot fail.
+
+### Changed
+
+- **Deleting an item now removes its shortcut too.** It was the item you deleted; you should not
+  keep being offered it. Undo is safe: a deleted shortcut is kept aside for an hour, so re-adding
+  the name restores its count, its icon and its aisle rather than starting from scratch — a stray
+  swipe on something you buy weekly no longer quietly drops it out of your shortcuts.
+- **MCP's `remove_item` says what it now does** — it deletes the item *and* forgets that name's
+  history, with no undo — and points at `check_item` for "we bought it". An assistant asked to tidy
+  a list could otherwise erase the staples your shortcuts are built on.
+
+### Fixed
+
+- **British names.** "Loo paper" resolved to nothing and "bog roll" was filed in Bakery, because
+  "roll" is a shorter word than the thing it was inside. Every name for the same product now lands
+  on one icon and one aisle, and the sweep found a lot of neighbours in the wrong place: cling film
+  and plastic wrap in Bakery, washing-up liquid reaching for the hand soap, sponge cake in Household
+  (via the washing-up sponge), pepperoni and limescale remover and garlic bread and mango chutney
+  all in Fruit & Veg, toilet duck in Meat & Fish, hand cream and nappy cream in Dairy. Poppadoms had
+  no spelling that resolved at all; nor did chapati, roti or paratha.
+- **"Nappies" and "ice lollies"** — the only forms anyone writes — resolved to nothing, because the
+  lookup matched a trailing "s" but not "-y" to "-ies".
+- **A shortcut with a slash in its name could never be forgotten.** A capture like "salt / pepper"
+  kept its punctuation, and the key travelled in the URL path, which the server splits on slashes —
+  so every attempt failed. On precisely the kind of mis-transcription the gesture exists to remove.
+- **Forgetting something and then pocketing your phone lost the change.** The request waits out the
+  undo window, and a suspended page never sent it: no error, and the shortcut back next Saturday.
+- **A failure after you started typing said nothing at all**, because the notice lived in the
+  shortcut tray and typing hides the tray.
+
 ## [0.3.1] - 2026-08-12
 
 ### Added

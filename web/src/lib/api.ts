@@ -245,6 +245,31 @@ export const api = {
     return requestJson<CatalogEntry[]>(`/api/catalog/top?n=${n}`);
   },
 
+  /**
+   * Forget a shortcut: removes the catalogue row so it stops being offered in
+   * the tray. Takes the entry's `name_norm` exactly as the catalogue gave it —
+   * the server matches it verbatim — and leaves any ITEM of that name on the
+   * list alone. 404 means it had already gone (another device got there first).
+   */
+  async forget(nameNorm: string, opts?: { keepalive?: boolean }): Promise<void> {
+    // The key rides in the QUERY STRING, not the path: catalogue keys keep
+    // their punctuation, and one holding "/" ("salt / pepper") cannot be
+    // expressed as a path segment at all — the server decodes before routing,
+    // so the segment splits and the shortcut is unforgettable however it is
+    // encoded.
+    //
+    // `keepalive` is set only by the tray's unload flush. A forget waits out
+    // its undo window before it is sent, so pocketing the phone inside those
+    // five seconds would otherwise abandon the request as the page is
+    // discarded — the shortcut stays, having been reported as forgotten. The
+    // request timeout is a setTimeout in the page's own context and simply
+    // never fires once the document is gone, so it cannot cut this short.
+    await request(`/api/catalog?${new URLSearchParams({ name_norm: nameNorm })}`, {
+      method: 'DELETE',
+      keepalive: opts?.keepalive,
+    });
+  },
+
   // --- passkey / session auth ---------------------------------------------
   // Ceremony options/results are opaque WebAuthn JSON; the codec + navigator
   // glue lives in lib/passkey.ts. Every call rides the session cookie via

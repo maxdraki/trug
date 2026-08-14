@@ -157,10 +157,44 @@
     ringToastTimer = setTimeout(() => (ringToast = null), 5000);
   }
 
+  /**
+   * Tells the recents tray that the catalogue may have moved under it. The tray
+   * is a fetch, not a subscription, so without this a shortcut deleted (or
+   * forgotten) anywhere — including on this device — stays on screen until the
+   * component next mounts: you delete the junk, watch the tray, and nothing
+   * happens.
+   *
+   * Only the three events that CAN change the catalogue bump it. Adding creates
+   * or bumps a row, deleting an item takes that row away whatever its count,
+   * and a forget removes one outright; checking, unchecking, editing and
+   * clearing the basket deliberately touch none of it.
+   * That is the difference between "no requests at all during the walk round
+   * the shop" (a check-off is the most repeated gesture there is) and one per
+   * tap on a phone with two bars in a carpark.
+   *
+   * Coalesced over a second, so a ring capture that lands five names — or a
+   * clear-out of several items — costs one refetch rather than five. The same
+   * window the ring toast batches on.
+   */
+  let catalogRevision = $state(0);
+  let catalogTimer: ReturnType<typeof setTimeout> | null = null;
+  const CATALOG_COALESCE_MS = 1000;
+
+  function catalogMayHaveChanged() {
+    if (catalogTimer) return;
+    catalogTimer = setTimeout(() => {
+      catalogTimer = null;
+      catalogRevision += 1;
+    }, CATALOG_COALESCE_MS);
+  }
+
   function onEvent(name: string, data: any) {
     if (name === 'item_added' && data?.source === 'ring' && typeof data.name === 'string') {
       ringBatch.push(data.name);
       if (!ringBatchTimer) ringBatchTimer = setTimeout(flushRingToast, 1000);
+    }
+    if (name === 'item_added' || name === 'item_removed' || name === 'catalog_forgotten') {
+      catalogMayHaveChanged();
     }
     store.applyEvent(name, data);
   }
@@ -213,10 +247,23 @@
     // banner and leaves the queue sitting there undrained.
     // The gate only mounts this shell once signed in, so the absence of a bearer
     // here means a cookie session — connect the stream cookie-authed.
+    // The stream carries nothing that happened while it was down, so every
+    // connect is also a moment the tray may be out of date — the FIRST one
+    // included. It used to be skipped, on the grounds that the tray had just
+    // fetched at mount. But a cold start with no signal is precisely the case
+    // where that mount fetch failed, and the first connect is precisely the
+    // moment the network arrived: skipping it left the tray blank for the whole
+    // session, since nothing else refetches it until an add or a delete. The
+    // shell cannot see whether the tray's own fetch landed, and the cost of
+    // assuming the worst is one coalesced GET per page load — beside the
+    // store.retry() this callback already makes unconditionally.
     const disconnect = connectEvents(
       (name, data) => onEvent(name, data),
       getToken,
-      () => store.retry().catch(noteSyncFailure),
+      () => {
+        catalogMayHaveChanged();
+        store.retry().catch(noteSyncFailure);
+      },
       () => cookieAuth,
       {
         // After a sustained run of failed reconnects, confirm we're still signed
@@ -273,6 +320,7 @@
       // Cancel any pending ring batch/toast timers so they don't fire after
       // teardown (and touch state on a torn-down component).
       if (ringBatchTimer) clearTimeout(ringBatchTimer);
+      if (catalogTimer) clearTimeout(catalogTimer);
       clearTimeout(ringToastTimer);
       clearTimeout(errorToastTimer);
       clearTimeout(copiedTimer);
@@ -334,7 +382,14 @@
 
   <main>
     {#if !query.trim() && !listEmpty}
-      <RecentsGrid top={api.top} {activeNames} onPick={(name) => store.add(name)} />
+      <RecentsGrid
+        top={api.top}
+        {activeNames}
+        onPick={(name) => store.add(name)}
+        onForget={api.forget}
+        onError={showError}
+        revision={catalogRevision}
+      />
     {/if}
     <ListView {store} walkOrder={WALK_ORDER} {drag} {onUpdate} />
   </main>

@@ -135,3 +135,52 @@ def test_patch_rejects_non_finite_sort_key():
     for bad in (float("inf"), float("-inf"), float("nan")):
         with pytest.raises(ValidationError):
             PatchItem(sort_key=bad)
+
+
+def test_delete_drops_the_item_from_frequently_added(client, auth):
+    item = client.post("/api/items", json={"name": "bag of tarragon"}, headers=auth).json()
+    top = client.get("/api/catalog/top", headers=auth).json()
+    assert [e["name_norm"] for e in top] == ["bag of tarragon"]
+
+    assert client.delete(f"/api/items/{item['id']}", headers=auth).status_code == 204
+
+    assert client.get("/api/catalog/top", headers=auth).json() == []
+    # The 5s undo re-adds by name through the normal add path and brings it back.
+    client.post("/api/items", json={"name": "bag of tarragon"}, headers=auth)
+    top = client.get("/api/catalog/top", headers=auth).json()
+    assert [(e["name_norm"], e["times_added"]) for e in top] == [("bag of tarragon", 2)]
+
+
+def test_undo_of_a_swipe_restores_a_staples_ranking(client, auth):
+    """End to end over HTTP: a staple with real history, stray-swiped and undone,
+    keeps its place at the top of the shortcut tray. Before the stash it came
+    back at times_added = 1 and sat behind everything else for weeks."""
+    for _ in range(9):
+        item = client.post("/api/items", json={"name": "Milk"}, headers=auth).json()
+        client.patch(f"/api/items/{item['id']}", json={"status": "checked"}, headers=auth)
+        client.post("/api/list/clear-checked", headers=auth)
+    milk = client.post("/api/items", json={"name": "Milk"}, headers=auth).json()
+    client.post("/api/items", json={"name": "Paprika"}, headers=auth)
+    top = client.get("/api/catalog/top", headers=auth).json()
+    assert [e["name_norm"] for e in top] == ["milk", "paprika"]
+
+    assert client.delete(f"/api/items/{milk['id']}", headers=auth).status_code == 204
+    # Gone from the tray and from typeahead the instant it is deleted.
+    assert [e["name_norm"] for e in client.get("/api/catalog/top", headers=auth).json()] \
+        == ["paprika"]
+    assert client.get("/api/catalog", params={"q": "mil"}, headers=auth).json() == []
+
+    client.post("/api/items", json={"name": "Milk"}, headers=auth)  # the undo
+
+    top = client.get("/api/catalog/top", headers=auth).json()
+    assert [(e["name_norm"], e["times_added"]) for e in top] == [("milk", 11), ("paprika", 1)]
+    assert [e["name_norm"] for e in
+            client.get("/api/catalog", params={"q": "mil"}, headers=auth).json()] == ["milk"]
+
+
+def test_clear_checked_keeps_frequently_added(client, auth):
+    item = client.post("/api/items", json={"name": "milk"}, headers=auth).json()
+    client.patch(f"/api/items/{item['id']}", json={"status": "checked"}, headers=auth)
+    client.post("/api/list/clear-checked", headers=auth)
+    top = client.get("/api/catalog/top", headers=auth).json()
+    assert [(e["name_norm"], e["times_added"]) for e in top] == [("milk", 1)]
