@@ -1,4 +1,5 @@
 import type { Item, ListResponse, CatalogEntry, ItemStatus } from './types';
+import { readStored, writeStored } from './safeStorage';
 
 const TOKEN_KEY = 'trug_token';
 
@@ -57,16 +58,21 @@ async function fetchWithTimeout(path: string, init: RequestInit = {}): Promise<R
 }
 
 export function setToken(t: string): void {
-  localStorage.setItem(TOKEN_KEY, t);
+  writeStored(TOKEN_KEY, t);
 }
 
+/**
+ * The stored bearer, or null — including when storage cannot be reached at all.
+ * Null is the honest answer there: no bearer is available, so the caller falls
+ * through to the session cookie instead of the whole request path throwing.
+ */
 export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
+  return readStored(TOKEN_KEY);
 }
 
 /** Forget a stored bearer (e.g. a stale one that failed validation on boot). */
 export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
+  writeStored(TOKEN_KEY, null);
 }
 
 /**

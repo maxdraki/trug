@@ -44,6 +44,17 @@ export interface StoreDeps {
    * sync and the shelf has silently rolled back under their thumb.
    */
   onError?: (message: string) => void;
+  /**
+   * Called when an item ARRIVES from elsewhere — an `item_added` frame that is
+   * not the echo of one of our own pending ops. The shell uses it to give a
+   * short haptic tick so a ring or assistant add is felt, not just seen.
+   *
+   * The store stays presentation-free (it neither imports haptics nor touches
+   * `navigator`); this callback is the whole of how the shell is told.
+   * Deliberately NOT fired for `item_updated`: that frame also carries note
+   * edits and other devices' check-offs, so it would buzz through a whole shop.
+   */
+  onRemoteAdd?: (item: Item) => void;
 }
 
 export interface Store {
@@ -80,7 +91,7 @@ export interface Store {
  * correct if runes are ever swapped for plain reactive fields.
  */
 export function createStore(deps: StoreDeps): Store {
-  const { api, queue, walkOrder, onError } = deps;
+  const { api, queue, walkOrder, onError, onRemoteAdd } = deps;
 
   let active = $state<Item[]>([]);
   let checked = $state<Item[]>([]);
@@ -628,6 +639,8 @@ export function createStore(deps: StoreDeps): Store {
         const it = data as Item;
         if (pending.has(it.id)) return; // ignore echoes of our own pending ops
         place(it);
+        // Arrival only — never on 'item_updated' (see StoreDeps.onRemoteAdd).
+        if (name === 'item_added') onRemoteAdd?.(it);
         break;
       }
       case 'item_removed':

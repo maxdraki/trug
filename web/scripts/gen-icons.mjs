@@ -45,6 +45,8 @@ const UI_SLUGS = [
   'check',
   'shopping-bag',
   'clock',
+  // Add bar: the voice-input button, on devices whose browser can hear.
+  'microphone',
 ];
 
 function inner(name) {

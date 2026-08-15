@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-15
+
+### Added
+
+- **Say it instead of typing it.** A mic sits in the add bar, and what it hears goes onto the list
+  by the same route a typed item does. It appears only where the browser can actually hear: Chrome
+  and Edge yes, Firefox only with `media.webspeech.recognition.enable` set, and — for now — not in
+  an installed web app on iOS, where the API is present but dead. Rather than sniff for that, the
+  button asks once and retires itself on that device if the answer is no, so it will light up on
+  its own the day Apple ships support. Note that recognition is the browser's, not Trug's: outside
+  Chrome's on-device mode the audio goes to the browser vendor.
+- **A buzz when something lands from elsewhere.** An item arriving from the smart ring or from an
+  assistant over MCP gives the phone a short tick, so a change made in the kitchen is felt by
+  whoever is holding the list in the shop. Items you add yourself never buzz. There is a switch in
+  Settings under Alerts, and the browser has the final say — Safari and Firefox cannot vibrate at
+  all, and no browser will until the page has been touched once.
+
 ## [0.3.2] - 2026-08-14
 
 ### Added
@@ -297,7 +314,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/maxdraki/trug/compare/v0.3.2...v0.4.0
+[0.3.2]: https://github.com/maxdraki/trug/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/maxdraki/trug/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/maxdraki/trug/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/maxdraki/trug/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/maxdraki/trug/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/maxdraki/trug/compare/v0.1.5...v0.2.0

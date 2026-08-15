@@ -1,3 +1,5 @@
+import { readStored, writeStored } from './safeStorage';
+
 const FLAVOUR_KEY = 'trug_flavour';
 const ACCENT_KEY = 'trug_accent';
 const DENSITY_KEY = 'trug_density';
@@ -15,19 +17,17 @@ export function applyTheme(flavour: string | null, accent: string | null): void 
 
   if (flavour) {
     root.dataset.flavour = flavour;
-    localStorage.setItem(FLAVOUR_KEY, flavour);
   } else {
     delete root.dataset.flavour;
-    localStorage.removeItem(FLAVOUR_KEY);
   }
+  writeStored(FLAVOUR_KEY, flavour);
 
   if (accent) {
     root.dataset.accent = accent;
-    localStorage.setItem(ACCENT_KEY, accent);
   } else {
     delete root.dataset.accent;
-    localStorage.removeItem(ACCENT_KEY);
   }
+  writeStored(ACCENT_KEY, accent);
 }
 
 /**
@@ -48,18 +48,14 @@ export function applyDensity(density: string | null): void {
 
   if (density) {
     root.dataset.density = density;
-    localStorage.setItem(DENSITY_KEY, density);
   } else {
     delete root.dataset.density;
-    localStorage.removeItem(DENSITY_KEY);
   }
+  writeStored(DENSITY_KEY, density);
 }
 
 /** Restore the persisted theme, if any, from localStorage. */
 export function loadTheme(): void {
-  applyTheme(
-    localStorage.getItem(FLAVOUR_KEY),
-    localStorage.getItem(ACCENT_KEY),
-  );
-  applyDensity(localStorage.getItem(DENSITY_KEY));
+  applyTheme(readStored(FLAVOUR_KEY), readStored(ACCENT_KEY));
+  applyDensity(readStored(DENSITY_KEY));
 }

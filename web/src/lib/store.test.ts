@@ -449,6 +449,63 @@ describe('createStore', () => {
     await p;
   });
 
+  it('onRemoteAdd fires for an item_added frame, with the item', () => {
+    const onRemoteAdd = vi.fn();
+    const store = createStore({
+      api: fakeApi(),
+      queue: freshQueue(),
+      walkOrder: ['Other'],
+      onRemoteAdd,
+    });
+
+    const arrived = item({ id: 'r1', name: 'Lemons', source: 'ring' });
+    store.applyEvent('item_added', arrived);
+
+    expect(onRemoteAdd).toHaveBeenCalledTimes(1);
+    expect(onRemoteAdd).toHaveBeenCalledWith(arrived);
+  });
+
+  it('onRemoteAdd does NOT fire for item_updated', () => {
+    // That frame also carries note edits and check-offs from other devices, so
+    // firing on it would buzz on every check-off during a shop.
+    const onRemoteAdd = vi.fn();
+    const store = createStore({
+      api: fakeApi(),
+      queue: freshQueue(),
+      walkOrder: ['Other'],
+      onRemoteAdd,
+    });
+
+    store.applyEvent('item_updated', item({ id: 'r1', name: 'Lemons', source: 'ring' }));
+
+    expect(onRemoteAdd).not.toHaveBeenCalled();
+  });
+
+  it('onRemoteAdd does NOT fire for the echo of our own pending add', async () => {
+    const d = deferred<{ item: Item; created: boolean }>();
+    const api = fakeApi({ addItem: vi.fn(() => d.promise) });
+    const onRemoteAdd = vi.fn();
+    const store = createStore({ api, queue: freshQueue(), walkOrder: ['Other'], onRemoteAdd });
+
+    const p = store.add('Milk');
+    const optId = flat(store).find((i) => i.name === 'Milk')!.id;
+
+    store.applyEvent('item_added', item({ id: optId, name: 'Milk' }));
+    expect(onRemoteAdd).not.toHaveBeenCalled();
+
+    d.resolve({ item: item({ id: optId, name: 'Milk' }), created: true });
+    await p;
+  });
+
+  it('applyEvent still works when onRemoteAdd is omitted', () => {
+    const store = createStore({ api: fakeApi(), queue: freshQueue(), walkOrder: ['Other'] });
+
+    expect(() =>
+      store.applyEvent('item_added', item({ id: 'r1', name: 'Lemons', source: 'ring' })),
+    ).not.toThrow();
+    expect(flat(store).some((i) => i.id === 'r1')).toBe(true);
+  });
+
   it('toggle checks an active item and enqueues + reconciles', async () => {
     const api = fakeApi({
       list: vi.fn(() =>

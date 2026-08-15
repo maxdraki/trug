@@ -2,6 +2,8 @@
   import { fade } from 'svelte/transition';
   import { d, fadeDur, DUR, EASE, EASE_CSS, rise, unfold, fold } from '../lib/motion';
   import { applyTheme, applyDensity } from '../lib/theme';
+  import { hapticsEnabled, setHapticsEnabled } from '../lib/haptics';
+  import { readStored } from '../lib/safeStorage';
   import {
     api,
     type SessionInfo,
@@ -50,9 +52,16 @@
   ] as const;
 
   // Seed from persisted choices so the sheet reflects the live theme.
-  let flavour = $state<string | null>(localStorage.getItem('trug_flavour'));
-  let accent = $state<string>(localStorage.getItem('trug_accent') ?? 'peach');
-  let density = $state<string | null>(localStorage.getItem('trug_density'));
+  // Read through the guard: these run at component init, so an unguarded lookup
+  // in a browser with site data blocked took the whole sheet down rather than
+  // costing a remembered preference.
+  let flavour = $state<string | null>(readStored('trug_flavour'));
+  let accent = $state<string>(readStored('trug_accent') ?? 'peach');
+  let density = $state<string | null>(readStored('trug_density'));
+  // Per-device: buzz when the ring or an assistant adds something. On unless
+  // this device has turned it off.
+  let haptics = $state<boolean>(hapticsEnabled());
+  const canVibrate = typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function';
 
   // --- collapsible sections -------------------------------------------------
   // Every section is a disclosure. Theme + Accent + Density default open (the
@@ -63,6 +72,7 @@
     | 'theme'
     | 'accent'
     | 'density'
+    | 'alerts'
     | 'devices'
     | 'members'
     | 'connections'
@@ -72,6 +82,7 @@
     theme: true,
     accent: true,
     density: true,
+    alerts: true,
     devices: false,
     members: false,
     connections: false,
@@ -117,6 +128,11 @@
   function pickDensity(id: string | null) {
     density = id;
     applyDensity(id);
+  }
+
+  function toggleHaptics() {
+    haptics = !haptics;
+    setHapticsEnabled(haptics);
   }
 
   // --- devices (cookie-authed humans) ---------------------------------------
@@ -667,6 +683,46 @@
           </div>
         {/if}
       </section>
+
+      <!-- Only where the browser can actually buzz. Safari has never shipped
+           `navigator.vibrate` and Firefox dropped it at 129, so on an iPhone —
+           the device most likely to be in a pocket at the shop — this section
+           would otherwise promise a buzz that can never happen, with an
+           on-by-default switch to make the promise look deliberate. -->
+      {#if canVibrate}
+      <section>
+        {@render disclosure('alerts', 'Alerts')}
+        {#if openSections.alerts}
+          <div
+            class="region"
+            id="settings-region-alerts"
+            role="region"
+            aria-label="Alerts"
+            in:unfold
+            out:fold
+          >
+            <button
+              type="button"
+              class="toggle"
+              aria-pressed={haptics}
+              onclick={toggleHaptics}
+            >
+              <span class="toggle-label">Buzz when the ring or an assistant adds an item</span>
+              <span class="track" class:on={haptics} aria-hidden="true">
+                <span
+                  class="knob"
+                  style="transition: transform {d(DUR.expand)}ms {EASE_CSS.expand}"
+                ></span>
+              </span>
+            </button>
+            <p class="hint">
+              This phone only, and not until the page has been touched once —
+              browsers won't buzz at a page you haven't interacted with.
+            </p>
+          </div>
+        {/if}
+      </section>
+      {/if}
 
       {#if cookieAuth}
         <section>
@@ -1238,6 +1294,53 @@
   .chip.selected {
     border-color: var(--ctp-overlay1);
     background: var(--ctp-surface0);
+  }
+  .toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    width: 100%;
+    padding: 10px 14px;
+    font-size: 14px;
+    text-align: left;
+    border-radius: var(--radius);
+    border: var(--hairline);
+    background: var(--ctp-mantle);
+    color: var(--ctp-text);
+    cursor: pointer;
+  }
+  .toggle-label {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .track {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    width: 40px;
+    height: 24px;
+    padding: 3px;
+    border-radius: 999px;
+    background: var(--ctp-surface1);
+    transition: background-color 120ms ease;
+  }
+  .track.on {
+    background: var(--accent);
+  }
+  .knob {
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--ctp-base);
+  }
+  .track.on .knob {
+    transform: translateX(16px);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .knob {
+      transition: none !important;
+    }
   }
   .swatch .dot {
     width: 12px;
