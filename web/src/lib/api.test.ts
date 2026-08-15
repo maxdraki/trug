@@ -270,3 +270,35 @@ describe('api client', () => {
     expect(err.status).toBe(404);
   });
 });
+
+/**
+ * The token is read on the path of every request and at boot. A browser that
+ * throws on the `localStorage` lookup would therefore have failed the sign-in
+ * gate rather than falling back to the session cookie.
+ */
+describe('blocked storage', () => {
+  const real = Object.getOwnPropertyDescriptor(window, 'localStorage')!;
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'localStorage', real);
+    localStorage.clear();
+  });
+
+  it('reports no stored token rather than throwing', () => {
+    expect(() => getToken()).not.toThrow();
+    expect(getToken()).toBeNull();
+  });
+
+  it('accepts a token it cannot keep', () => {
+    expect(() => setToken('abc')).not.toThrow();
+  });
+});

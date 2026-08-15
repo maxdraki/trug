@@ -8,6 +8,7 @@
   import { connectEvents } from '../lib/sse';
   import { staleHint, clearSnapshot } from '../lib/snapshot';
   import { requestPersistentStorage } from '../lib/storage';
+  import { tickOnRemoteAdd } from '../lib/haptics';
   import { WALK_ORDER } from '../lib/walkOrder';
   import ListView from './ListView.svelte';
   import AddBar from './AddBar.svelte';
@@ -24,6 +25,9 @@
     // A change that could not be saved has already been rolled back on the
     // shelf; say so, through the same transient toast a refused drag uses.
     onError: (message) => showError(message),
+    // Something landed on the list that nobody here typed. `tickOnRemoteAdd`
+    // decides whether it deserves a buzz — only the ring and MCP do.
+    onRemoteAdd: (item) => tickOnRemoteAdd(item),
   });
   const drag = createDragController({
     getGroups: () => store.groups,

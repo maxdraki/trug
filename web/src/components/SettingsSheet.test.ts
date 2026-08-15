@@ -61,6 +61,12 @@ describe('SettingsSheet', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    // jsdom has no Vibration API, and neither has Safari — the Alerts section
+    // hides itself where the browser cannot buzz, so a test that wants to see
+    // it has to say it is on a browser that can. Defined ON the real navigator
+    // rather than replacing it: a substitute navigator loses everything else
+    // jsdom and testing-library read off it.
+    Object.defineProperty(navigator, 'vibrate', { value: () => true, configurable: true });
     // The Members section loads the household roster from the server on open.
     listMembers.mockResolvedValue({
       users: [
@@ -138,6 +144,68 @@ describe('SettingsSheet', () => {
     render(SettingsSheet, { open: true, onClose: vi.fn() });
 
     expect(screen.getByRole('button', { name: 'Dense' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  const BUZZ = 'Buzz when the ring or an assistant adds an item';
+
+  it('shows the buzz toggle on by default and flips it off', async () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    const toggle = screen.getByRole('button', { name: BUZZ });
+    expect(toggle.getAttribute('aria-pressed')).toBe('true');
+
+    await fireEvent.click(toggle);
+
+    expect(screen.getByRole('button', { name: BUZZ }).getAttribute('aria-pressed')).toBe('false');
+    expect(localStorage.getItem('trug_haptics')).toBe('off');
+  });
+
+  it('seeds the buzz toggle from the persisted preference', () => {
+    localStorage.setItem('trug_haptics', 'off');
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    expect(screen.getByRole('button', { name: BUZZ }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  // An on-by-default switch promising a buzz the platform cannot deliver is
+  // worse than no switch: it reads as a setting that has been turned on for you.
+  it('hides Alerts entirely on a browser that cannot vibrate', () => {
+    // @ts-expect-error — putting the environment back the way Safari has it.
+    delete navigator.vibrate;
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    expect(screen.queryByRole('button', { name: 'Alerts' })).toBeNull();
+    expect(screen.queryByRole('button', { name: BUZZ })).toBeNull();
+  });
+
+  // Every preference the sheet shows is read at init. A browser with site data
+  // blocked throws on the `localStorage` lookup itself, so those reads have to
+  // be guarded or the sheet cannot open at all.
+  it('opens on a browser that blocks storage, falling back to the defaults', () => {
+    const real = Object.getOwnPropertyDescriptor(window, 'localStorage')!;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+    try {
+      render(SettingsSheet, { open: true, onClose: vi.fn() });
+      expect(screen.getByRole('button', { name: 'Mocha' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Comfortable' }).getAttribute('aria-pressed')).toBe(
+        'true',
+      );
+    } finally {
+      Object.defineProperty(window, 'localStorage', real);
+    }
+  });
+
+  it('defaults the Alerts section open', () => {
+    render(SettingsSheet, { open: true, onClose: vi.fn() });
+
+    expect(screen.getByRole('button', { name: 'Alerts' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    );
   });
 
   it('defaults Theme + Accent open and the occasional sections collapsed', () => {

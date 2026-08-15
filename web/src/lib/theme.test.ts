@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { applyTheme, applyDensity, loadTheme } from './theme';
 import fs from 'node:fs';
 
@@ -33,4 +33,47 @@ it('loadTheme restores the persisted density', () => {
   delete document.documentElement.dataset.density;
   loadTheme();
   expect(document.documentElement.dataset.density).toBe('dense');
+});
+
+/**
+ * A browser with site data blocked throws on the `localStorage` LOOKUP, not on
+ * the call. `loadTheme()` runs at main.ts:12 before the app mounts, so an
+ * unguarded read there was a blank page rather than a lost preference.
+ */
+describe('blocked storage', () => {
+  const real = Object.getOwnPropertyDescriptor(window, 'localStorage')!;
+
+  function block(): void {
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get() {
+        throw new DOMException('The operation is insecure.', 'SecurityError');
+      },
+    });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(window, 'localStorage', real);
+    localStorage.clear();
+    delete document.documentElement.dataset.flavour;
+    delete document.documentElement.dataset.accent;
+    delete document.documentElement.dataset.density;
+  });
+
+  it('boots with the default theme instead of throwing', () => {
+    block();
+    expect(() => loadTheme()).not.toThrow();
+  });
+
+  it('still applies a chosen theme to the page it cannot persist it for', () => {
+    block();
+    expect(() => applyTheme('latte', 'mauve')).not.toThrow();
+    expect(document.documentElement.dataset.flavour).toBe('latte');
+  });
+
+  it('still applies a chosen density', () => {
+    block();
+    expect(() => applyDensity('dense')).not.toThrow();
+    expect(document.documentElement.dataset.density).toBe('dense');
+  });
 });
