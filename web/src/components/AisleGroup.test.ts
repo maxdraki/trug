@@ -44,7 +44,6 @@ function props(drag: DragController) {
     pendingIds: new Set<string>(),
     drag,
     onToggle: vi.fn(),
-    onRemove: vi.fn(),
     onOpen: vi.fn(),
   };
 }

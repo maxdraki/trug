@@ -38,10 +38,28 @@
   } = $props();
 
   let editing = $state<Item | null>(null);
-  let undo = $state<{ items: Item[]; timer: ReturnType<typeof setTimeout> } | null>(null);
-  // A single swipe-commit undo (delete or to-basket), mirroring the clear-checked
-  // undo: a 5s window with an action that reverses the store mutation.
-  let swipeUndo = $state<{ text: string; onUndo: () => void; timer: ReturnType<typeof setTimeout> } | null>(null);
+  /* What an undo is FOR, which decides what it may displace.
+     `check` is the cheap one: the row is sitting in the basket drawer, one tap
+     from being back, so it is recoverable whether or not this notice survives.
+     `delete` and `clear` are not — a deleted row takes its note with it, and a
+     cleared basket takes a pile of them — so a check-off never displaces one. */
+  type UndoKind = 'check' | 'delete' | 'clear';
+  /* ONE undo notice, not two. There used to be a second — the cleared basket's
+     — rendered by an `{:else if}` behind this one, keeping its own independent
+     five seconds. Since a check-off is always armed later than a live clear and
+     both windows are 5s, the hidden one ALWAYS expired first and always while
+     masked: the shopper watched a notice offering twelve rows back turn, with
+     no transition and no signal, into one about the item they just ticked off,
+     and the twelve were gone. One slot means a displaced undo is displaced
+     visibly, and a notice on screen is always the notice that is live. */
+  let swipeUndo = $state<{
+    text: string;
+    onUndo: () => void;
+    timer: ReturnType<typeof setTimeout>;
+    kind: UndoKind;
+    /** The row it speaks for, so a later gesture on that row can retire it. */
+    id?: string;
+  } | null>(null);
   // True only while a "clear checked" batch is on its way out. It does two
   // jobs, and the second one is what makes the first work at all: it applies
   // the staggered farewell to a bulk clear (a single uncheck or delete gets the
@@ -182,9 +200,12 @@
   onDestroy(() => {
     holds.releaseAll();
     // Every timer this component owns has to die with it, not just the holds'.
-    // This one flips `clearing` back off; left running it reaches for state on
-    // a destroyed component 400-odd ms after the list has gone.
+    // `clearingTimer` flips `clearing` back off; left running it reaches for
+    // state on a destroyed component 400-odd ms after the list has gone. The
+    // undo timer does the same 5s later, and now that EVERY check-off arms one,
+    // that is the most common timer the view owns rather than a rare one.
     clearTimeout(clearingTimer);
+    if (swipeUndo) clearTimeout(swipeUndo.timer);
   });
 
   // One item is in exactly one place at a time: a held row still counts as its
@@ -196,7 +217,7 @@
 
   const empty = $derived(groups.length === 0 && basket.length === 0);
 
-  function toggle(id: string) {
+  function toggle(id: string, holdMs: number = d(DUR.check)) {
     // Where the row is NOW decides everything: found on a shelf, this tap is a
     // check-off and the row is held; anywhere else (a basket row, or a row
     // already held and tapped a second time) it is an uncheck, which holds
@@ -205,6 +226,11 @@
     // the rows that are mid-hold, and a slot counted in a list those rows are
     // missing from is a slot short: two rows checked off 40ms apart came back
     // in the wrong order, the aisle visibly swapping them under the thumb.
+    // A live undo for THIS row is stale the moment the row is touched again —
+    // check a row off and un-check it by hand and the toast would still read
+    // "In the basket", with a button that now checks it off a second time.
+    // Undo doing the opposite of undo is worse than no undo.
+    if (swipeUndo?.id === id) clearSwipeUndo();
     const slot = heldSlot(groups, id);
     // Let go of any hold on this id first — a second tap inside the window is an
     // uncheck, and the store's answer is what should render.
@@ -213,18 +239,55 @@
     // happen on this tick, so the hold cannot lose a check-off or desync the
     // pending set. It is presentation, nothing more.
     store.toggle(id);
-    if (slot) holds.hold(slot, d(DUR.check));
+    if (!slot) return; // an uncheck: the row going back IS the undo
+    // How long the row stays on its shelf wearing the check. A tap's
+    // confirmation is the strike drawing, so the strike's own duration is the
+    // window; a right-swipe's is the row completing the journey the thumb threw
+    // it on, which takes longer. Held for the shorter one, the row would be
+    // yanked off the shelf partway through its own slide.
+    holds.hold(slot, holdMs);
+    // Every check-off is offered back, however it was asked for. The GESTURE
+    // decides how the row leaves — a swipe has a direction and momentum to
+    // follow through, a tap has neither — but the undo answers the CONSEQUENCE,
+    // and both gestures have exactly the same one. Offered to the swipe alone,
+    // a mistap cost a hunt through a basket drawer that is collapsed by default.
+    //
+    // Routed back through this function rather than straight to `store.toggle`:
+    // pressed inside the hold window it has to let the held copy GO as well as
+    // uncheck the row, or the same id is keyed twice in one each-block. The
+    // re-entry is safe — an uncheck finds no slot and returns above, so it
+    // neither holds anything nor offers an undo of its own.
+    // Never over something dearer. A check-off is recoverable from the drawer
+    // whatever happens to this notice; a delete or a cleared basket is not.
+    if (swipeUndo && swipeUndo.kind !== 'check') return;
+    // Named, because "In the basket" is the same sentence about every row: tick
+    // off Milk, Bread and Beer in one breath and the notice never changes, so
+    // the shopper correcting the Milk mistap presses Undo and gets Beer. It is
+    // also what makes the live region speak again — a status region whose text
+    // is unchanged does not re-announce.
+    showSwipeUndo(`${slot.item.name} in the basket`, () => toggle(id), 'check', id);
   }
-  function remove(id: string) {
-    store.remove(id);
+  /** Every single-row delete, whatever gesture asked for it. The undo is not
+   *  decoration: a delete also RETIRES the name's catalogue row, and only a
+   *  re-add inside the server's stash window brings that shortcut back to the
+   *  tray and to typeahead. Without one, a mistap quietly costs the name its
+   *  whole history.
+   *
+   *  It takes the ROW rather than an id so there is never a delete it cannot
+   *  offer back. Looking the id up in the store instead left one path with no
+   *  undo — the sheet's Remove, for a row the store had meanwhile dropped (a
+   *  partner's delete, an SSE removal racing the tap) — which is exactly the
+   *  silent case this exists to close. Both callers are holding the row
+   *  already; the sheet's may carry a note one save behind, which is a far
+   *  better undo than none. */
+  function deleteWithUndo(item: Item) {
+    const { name } = item;
+    const note = item.note ?? undefined;
+    store.remove(item.id);
+    showSwipeUndo(`Deleted ${name}`, () => store.add(name, note), 'delete');
   }
   function open(item: Item) {
     editing = item;
-  }
-
-  function clearUndo() {
-    if (undo) clearTimeout(undo.timer);
-    undo = null;
   }
 
   function clearChecked() {
@@ -250,49 +313,56 @@
       );
     }
     store.clearChecked();
-    clearUndo();
-    undo = {
-      items: snapshot,
-      timer: setTimeout(() => {
-        undo = null;
-      }, 5000),
-    };
+    showSwipeUndo(
+      `Cleared ${snapshot.length} item${snapshot.length === 1 ? '' : 's'}`,
+      () => {
+        for (const it of snapshot) store.add(it.name, it.note ?? undefined);
+      },
+      'clear',
+    );
   }
 
-  function undoClear() {
-    if (!undo) return;
-    for (const it of undo.items) store.add(it.name, it.note ?? undefined);
-    clearUndo();
-  }
-
-  function showSwipeUndo(text: string, onUndo: () => void) {
-    if (swipeUndo) clearTimeout(swipeUndo.timer);
-    swipeUndo = { text, onUndo, timer: setTimeout(() => (swipeUndo = null), 5000) };
-  }
-  function runSwipeUndo() {
+  function clearSwipeUndo() {
     if (!swipeUndo) return;
     clearTimeout(swipeUndo.timer);
-    swipeUndo.onUndo();
     swipeUndo = null;
+  }
+  function showSwipeUndo(text: string, onUndo: () => void, kind: UndoKind, id?: string) {
+    clearSwipeUndo();
+    swipeUndo = { text, onUndo, kind, id, timer: setTimeout(() => (swipeUndo = null), 5000) };
+  }
+  function runSwipeUndo() {
+    const u = swipeUndo;
+    if (!u) return;
+    clearTimeout(u.timer);
+    // Cleared BEFORE the action, not after: `onUndo` may arm a notice of its
+    // own, and nulling afterwards would drop that one on the floor while its
+    // timer went on running — later blanking whatever unrelated undo happened
+    // to be on screen when it fired.
+    swipeUndo = null;
+    // Does this still describe the world? A row can return to the shelf without
+    // passing through any gesture of ours — the store rolling a failed check
+    // back, or someone else un-checking it on their phone. Firing anyway would
+    // check it off AGAIN: undo doing the exact opposite of undo. Then the only
+    // honest thing left is to take the offer away, which is what the shopper
+    // sees.
+    if (u.kind === 'check' && !store.checked.some((i) => i.id === u.id)) return;
+    u.onUndo();
   }
 
   // Left-swipe: delete, with a 5s undo. Undo re-adds by name/note through the
   // normal add path — its category re-resolves via the tier-0 / catalog lookup
   // and it gets a fresh id, so this restores the item, not the exact prior row.
-  function swipeDelete(item: Item) {
-    const { name } = item;
-    const note = item.note ?? undefined;
-    store.remove(item.id);
-    showSwipeUndo(`Deleted ${name}`, () => store.add(name, note));
-  }
-  // Right-swipe (active rows only): send to the basket via the same toggle the
-  // check-off uses; undo toggles the (same id) row back to active.
+  const swipeDelete = deleteWithUndo;
+  // Right-swipe (active rows only): the same check-off a tap performs, and the
+  // same undo. All this adds is the hold window — the slide's length plus a
+  // frame's grace, because a transition does not start until the next style
+  // recalc and so lands a frame AFTER a timer set on the same tick, leaving the
+  // row pulled into its exit with the last frame unrun. `springBack` buys
+  // itself the same margin. The grace goes INSIDE `d()`, so reduced motion
+  // still holds nothing at all.
   function swipeBasket(item: Item) {
-    toggle(item.id);
-    // Undo through the same toggle, not straight to the store: pressed inside
-    // the hold window it has to let the row go as well as un-check it, or the
-    // held copy and the store's restored row are the same id twice over.
-    showSwipeUndo('In the basket', () => toggle(item.id));
+    toggle(item.id, d(DUR.swipeCommit + 20));
   }
 </script>
 
@@ -309,7 +379,6 @@
           heldIds={holds.ids}
           {drag}
           onToggle={toggle}
-          onRemove={remove}
           onOpen={open}
           onSwipeLeft={swipeDelete}
           onSwipeRight={swipeBasket}
@@ -395,7 +464,7 @@
                   delay: clearing ? staggerDelay(i) : 0,
                 }}
               >
-                <ItemRow {item} onToggle={toggle} onRemove={remove} onOpen={open} onSwipeLeft={swipeDelete} pending={store.pendingIds.has(item.id)} />
+                <ItemRow {item} onToggle={toggle} onOpen={open} onSwipeLeft={swipeDelete} pending={store.pendingIds.has(item.id)} />
               </div>
             {/each}
           </div>
@@ -410,11 +479,6 @@
     <span>{swipeUndo.text}</span>
     <button class="undo-btn" type="button" onclick={runSwipeUndo}>Undo</button>
   </Toast>
-{:else if undo}
-  <Toast variant="neutral">
-    <span>Cleared {undo.items.length} item{undo.items.length === 1 ? '' : 's'}</span>
-    <button class="undo-btn" type="button" onclick={undoClear}>Undo</button>
-  </Toast>
 {/if}
 
 {#if editing}
@@ -423,7 +487,7 @@
       item={editing}
       {walkOrder}
       onSave={onUpdate}
-      onRemove={remove}
+      onRemove={deleteWithUndo}
       onClose={() => (editing = null)}
     />
   {/key}

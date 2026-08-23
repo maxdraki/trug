@@ -30,7 +30,6 @@
   let {
     item,
     onToggle,
-    onRemove,
     onOpen,
     onDragStart,
     onSwipeLeft,
@@ -40,7 +39,6 @@
   }: {
     item: Item;
     onToggle: (id: string) => void;
-    onRemove: (id: string) => void;
     onOpen?: (item: Item) => void;
     /** When present, the chip acts as a drag-to-reorder handle. */
     onDragStart?: (item: Item, ev: PointerEvent, rowEl: HTMLElement) => void;
@@ -106,6 +104,50 @@
       squash.set(1);
     }
   });
+
+  /* A committed swipe parks the row off-screen and deliberately leaves it
+     there: the transform, the `swiping` class and the revealed field all stay
+     put, because the row is on its way out and tidying them would flash it back
+     into place for a frame.
+
+     That was safe only while a commit always ended in the node being destroyed.
+     It no longer does — the row is now held on its shelf for the length of its
+     own slide, and three things can hand it BACK inside that window without
+     unmounting anything: the undo, a tap on the held row, or a partner
+     unchecking it over SSE. The each-block is keyed by id, so all three reuse
+     this very node. Left as it was, the restored row renders as an empty
+     row-height slab — content translated a full width out under
+     `overflow: hidden`, tick field still showing, toggle button clipped beyond
+     reach — and nothing would ever re-render it. Correct in the store, gone
+     from the screen, and silent.
+
+     So: the departure is undone by whatever undoes the departure. Keyed on
+     `checked` going false, which is the one thing all three routes have in
+     common. */
+  $effect(() => {
+    if (checked || !contentEl || !contentEl.style.transform) return;
+    contentEl.style.transition = '';
+    contentEl.style.transform = '';
+    contentEl.classList.remove('swiping');
+    clearFields();
+  });
+
+  /* The row's motion table, handed to CSS as custom properties so every
+     duration and curve in this file still comes from `motion.ts` and none is
+     written twice. Built here rather than inline in the markup: at seven
+     properties the attribute had stopped being readable, and a stray literal
+     could hide in it — which is exactly how `margin 140ms ease` got in. */
+  const rowStyle = $derived(
+    [
+      `--strike-dur: ${d(DUR.check)}ms`,
+      `--strike-ease: ${EASE_CSS.check}`,
+      `--glow-dur: ${d(DUR.glow)}ms`,
+      `--glow-delay: ${glowDelay}ms`,
+      `--lift-dur: ${DUR.lift}ms`,
+      `--gap-dur: ${d(DUR.gap)}ms`,
+      `--gap-ease: ${EASE_CSS.gap}`,
+    ].join('; '),
+  );
 
   function toggle() {
     navigator.vibrate?.(10);
@@ -210,15 +252,30 @@
         fire?.(target);
       }
     } else {
-      // Basket: snap the content home instantly, then toggle — the check-off
-      // treatment (squash, strike, and the row collapsing where it stands)
-      // carries it from there.
-      if (contentEl) {
-        contentEl.style.transition = '';
-        contentEl.style.transform = '';
-        contentEl.classList.remove('swiping');
+      // Basket: the same journey, mirrored. The two gestures differ in what
+      // they MEAN, not in how they move — direction, the field's colour and its
+      // glyph carry that, and both already have an undo behind them. It used to
+      // snap the content home in a single frame from up to ~190px out and then
+      // play the tap treatment, which inverted the grammar: a REJECTED swipe
+      // rubber-bands home over `swipeBack`, so failure had the smoother
+      // feedback and the two were indistinguishable for the first frame.
+      //
+      // The field is deliberately NOT cleared, exactly as the left path leaves
+      // its trash field up: the field belongs to the row that is leaving, and
+      // should go when its box does rather than a frame before it moves.
+      //
+      // Unlike the left path the handler fires NOW instead of at 60% of the
+      // slide. A delete can afford to wait — it has five seconds of undo behind
+      // it — but a check-off is the most repeated gesture in the app and
+      // `lib/hold.svelte.ts` is built on presentation never delaying a
+      // mutation, so a dropped animation costs an animation and never a check.
+      // The row survives its own slide because ListView widens the hold to
+      // match it.
+      const el = contentEl;
+      if (el && !reducedMotion()) {
+        el.style.transition = `transform ${d(DUR.swipeCommit)}ms ${EASE_CSS.swipeCommit}`;
+        el.style.transform = 'translateX(100%)';
       }
-      clearFields();
       onSwipeRight?.(item);
     }
     cleanup();
@@ -351,9 +408,7 @@
   class:glow={justArrived}
   class:fresh={justAdded}
   class:swipeable={!!onSwipeLeft || !!onSwipeRight}
-  style="--strike-dur: {d(DUR.check)}ms; --strike-ease: {EASE_CSS.check}; --glow-dur: {d(
-    DUR.glow,
-  )}ms; --glow-delay: {glowDelay}ms; --lift-dur: {DUR.lift}ms"
+  style={rowStyle}
   onpointerdown={onSwipeDown}
 >
   <!-- Action affordances revealed behind the row body as it slides; aria-hidden,
@@ -395,10 +450,6 @@
     <button class="icon-btn" type="button" onclick={() => onOpen?.(item)} aria-label="Edit {item.name}">
       <Icon name="pencil" size={15} stroke={1.75} />
     </button>
-  {:else}
-    <button class="icon-btn" type="button" onclick={() => onRemove(item.id)} aria-label="Remove {item.name}">
-      <Icon name="x" size={15} stroke={1.75} />
-    </button>
   {/if}
   </div>
 </div>
@@ -414,7 +465,7 @@
        the drop settle. Without it the row pops 24px wider in a single frame
        right as it lands, which is the last thing you see and so the thing you
        remember. Reduced motion strips it globally (app.css). */
-    transition: margin 140ms ease;
+    transition: margin var(--gap-dur, 140ms) var(--gap-ease, ease);
   }
   .row.pending {
     opacity: 0.55;

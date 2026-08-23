@@ -67,12 +67,13 @@ The signature mark is a stroke-drawn garden basket with a check cutting across t
 
 ## Motion
 
-Springs, never linear tweens; precision over bounce (overshoot barely perceptible). Everything ≤350ms and every duration gated on `prefers-reduced-motion` (reduced = instant state changes, haptics retained).
+Named cubic-bézier curves plus two small springs, nothing linear; precision over bounce (the check-off squash is one quick dip, no visible overshoot). Nothing exceeds 400ms and only clearing the basket reaches it. Every duration is gated on `prefers-reduced-motion`, and the gate is finer than "instant": travel is cut to zero, but fades are shortened to ≤100ms rather than removed — WCAG 2.3.3 excludes opacity and colour from motion, and a row that blinks between two frames gives no sign anything happened — and haptics are never gated. `web/src/lib/motion.ts` is the source of truth; the full audit is [`docs/animations.md`](docs/animations.md).
 
-- Add: chip travels from the pill/grid to its shelf; the shelf eases open.
+- Add: the row fades up in place over an 8px rise; the shelf eases open to receive it. (It flew from the pill to its shelf once — measured at ~7× faster than smooth-pursuit eye tracking, so nobody ever saw it arrive.)
 - Check-off: strike draws left→right, subtle squash, the row settles into "In the basket".
+- Swipe: a committed swipe follows through off the edge it was thrown at — check-off (right) and delete (left) move identically, because direction, the revealed field's colour and its glyph carry the meaning, not the kinematics. A rejected swipe springs back.
 - Ring arrivals: staggered entrance with a brief peach glow + toast — the one allowed flourish.
-- Clear: staggered sweep with a 5s undo.
+- Clear: staggered sweep with a 5s undo — the one expressive moment, and the only 400ms.
 
 ## Voice
 
