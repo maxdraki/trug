@@ -2,6 +2,9 @@ import { render, screen, fireEvent } from '@testing-library/svelte';
 import { describe, it, expect, vi } from 'vitest';
 import ItemRow from './ItemRow.svelte';
 import type { Item } from '../lib/types';
+import { DUR } from '../lib/motion';
+import { AXIS_LOCK_PX } from '../lib/swipe';
+import { pointerEvent } from '../lib/testing/pointer';
 import {
   contrast,
   declaration,
@@ -29,7 +32,7 @@ function item(partial: Partial<Item> & { id: string; name: string }): Item {
 describe('ItemRow', () => {
   it('renders a monogram (first letter) when icon is null and the name has no slug', () => {
     // 'Kryptonite' has no matching icon slug, so the chip falls back to a monogram.
-    render(ItemRow, { item: item({ id: '1', name: 'Kryptonite', icon: null }), onToggle: vi.fn(), onRemove: vi.fn() });
+    render(ItemRow, { item: item({ id: '1', name: 'Kryptonite', icon: null }), onToggle: vi.fn() });
     expect(screen.getByText('K')).toBeTruthy();
   });
 
@@ -39,7 +42,6 @@ describe('ItemRow', () => {
     const { container } = render(ItemRow, {
       item: item({ id: '2', name: 'Milk', icon: null }),
       onToggle: vi.fn(),
-      onRemove: vi.fn(),
     });
     expect(screen.queryByText('M')).toBeNull();
     expect(container.querySelector('svg')).toBeTruthy();
@@ -68,8 +70,97 @@ describe('ItemRow', () => {
 
   it('calls onToggle with the item id when the row is clicked', async () => {
     const onToggle = vi.fn();
-    render(ItemRow, { item: item({ id: 'abc', name: 'Milk' }), onToggle, onRemove: vi.fn() });
+    render(ItemRow, { item: item({ id: 'abc', name: 'Milk' }), onToggle });
     await fireEvent.click(screen.getByRole('button', { name: /^Milk$/ }));
     expect(onToggle).toHaveBeenCalledWith('abc');
+  });
+});
+
+/** Drag the row to `toX` and let go — far enough to commit by distance. */
+function swipeTo(container: HTMLElement, toX: number) {
+  const row = container.querySelector('.row') as HTMLElement;
+  const content = container.querySelector('.swipe-content') as HTMLElement;
+  // Distance commit is a fraction of the row's width, and jsdom lays nothing out.
+  Object.defineProperty(row, 'offsetWidth', { value: 300, configurable: true });
+  const lead = toX > 0 ? AXIS_LOCK_PX + 5 : -(AXIS_LOCK_PX + 5);
+  row.dispatchEvent(pointerEvent('pointerdown', { x: 0 }));
+  window.dispatchEvent(pointerEvent('pointermove', { x: lead }));
+  window.dispatchEvent(pointerEvent('pointermove', { x: toX }));
+  window.dispatchEvent(pointerEvent('pointerup', { x: toX }));
+  return { row, content };
+}
+
+// A committed swipe must finish the journey the thumb started, in the direction
+// it was thrown. Left already did; right snapped the row home in a single frame
+// from up to ~190px out and then played the tap check-off instead. That is not a
+// slower or plainer animation, it is a discontinuity — and the grammar was
+// inverted with it: a REJECTED swipe rubber-bands home over 200ms, so failure
+// had smoother feedback than success and the two were indistinguishable for the
+// first frame. Direction, colour and glyph carry what the gesture MEANS; the
+// kinematics are the same on both sides.
+describe('ItemRow swipe commit', () => {
+  it('carries a committed right-swipe off to the right, like a delete leaves left', () => {
+    const { container } = render(ItemRow, {
+      item: item({ id: 'pk', name: 'Pine Kernels' }),
+      onToggle: vi.fn(),
+      onSwipeRight: vi.fn(),
+      onSwipeLeft: vi.fn(),
+    });
+
+    const { content } = swipeTo(container as HTMLElement, 150);
+
+    expect(content.style.transform).toBe('translateX(100%)');
+    expect(content.style.transition).toContain(`${DUR.swipeCommit}ms`);
+  });
+
+  it('leaves the basket field showing under the departing row', () => {
+    // The delete path does not clear its trash field either: the field belongs
+    // to the row that is leaving and should go when its box does, not a frame
+    // before it starts moving.
+    const { container } = render(ItemRow, {
+      item: item({ id: 'pk', name: 'Pine Kernels' }),
+      onToggle: vi.fn(),
+      onSwipeRight: vi.fn(),
+      onSwipeLeft: vi.fn(),
+    });
+
+    swipeTo(container as HTMLElement, 150);
+
+    const field = container.querySelector('.swipe-field.basket') as HTMLElement;
+    expect(field.style.opacity).not.toBe('0');
+  });
+
+  it('still carries a committed left-swipe off to the left', () => {
+    // The path this change is matching — guards against fixing one by breaking
+    // the other.
+    const { container } = render(ItemRow, {
+      item: item({ id: 'pk', name: 'Pine Kernels' }),
+      onToggle: vi.fn(),
+      onSwipeRight: vi.fn(),
+      onSwipeLeft: vi.fn(),
+    });
+
+    const { content } = swipeTo(container as HTMLElement, -150);
+
+    expect(content.style.transform).toBe('translateX(-100%)');
+    expect(content.style.transition).toContain(`${DUR.swipeCommit}ms`);
+  });
+
+  it('commits the check-off on the spot, without waiting for the slide', () => {
+    // The hold system's proudest property (lib/hold.svelte.ts): presentation
+    // never delays a mutation, so a hold that is dropped costs an animation and
+    // never a check-off. The left path can afford its 60% handoff because a
+    // delete has an undo behind it; this one must not start queueing.
+    const onSwipeRight = vi.fn();
+    const { container } = render(ItemRow, {
+      item: item({ id: 'pk', name: 'Pine Kernels' }),
+      onToggle: vi.fn(),
+      onSwipeRight,
+      onSwipeLeft: vi.fn(),
+    });
+
+    swipeTo(container as HTMLElement, 150);
+
+    expect(onSwipeRight).toHaveBeenCalledTimes(1);
   });
 });

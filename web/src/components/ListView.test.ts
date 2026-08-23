@@ -469,8 +469,12 @@ describe('ListView check-off hold', () => {
     expect(container.querySelector('.shelf .row')).toBeNull();
     expect(container.querySelector('.shelf .aisle')).toBeNull();
     expect(getByRole('button', { name: /in the basket/i })).toBeTruthy();
-    // Nothing was scheduled: no hold, so no delay to sit through.
-    expect(vi.getTimerCount()).toBe(0);
+    // No hold was scheduled — no delay to sit through. The one timer left is
+    // the undo toast's five seconds, which is function rather than motion and
+    // so is deliberately NOT gated on reduced motion; a second timer here would
+    // mean a hold had been armed after all.
+    expect(vi.getTimerCount()).toBe(1);
+    expect(getByRole('button', { name: 'Undo' })).toBeTruthy();
   });
 
   it('checks off several rows in a row without stacking or stranding one', async () => {
@@ -505,7 +509,11 @@ describe('ListView check-off hold', () => {
     vi.advanceTimersByTime(50);
     await tick();
     expect(container.querySelector('.drawer-head .count')!.textContent).toBe('2');
-    expect(vi.getTimerCount()).toBe(0);
+    // Both holds have run out. The one timer left is the undo toast's, and
+    // there is exactly ONE of it for two check-offs — each arming retires the
+    // last, so a shopper going down the aisle does not accumulate timers.
+    expect(getByRole('button', { name: 'Undo' })).toBeTruthy();
+    expect(vi.getTimerCount()).toBe(1);
   });
 
   it('un-checks on a second tap inside the hold window, without a stale release', async () => {
@@ -620,13 +628,195 @@ async function swipe(target: Element, to: number) {
   await fireEvent.click(target);
 }
 
+// Tapping a row and swiping it right are the same act with the same
+// consequence, so they get the same undo. The gesture decides how the row
+// LEAVES — a swipe has a direction and momentum to follow through, a tap has
+// neither — but what is offered back afterwards belongs to the outcome, not to
+// how it was asked for. A mistap used to cost a hunt through a basket drawer
+// that is collapsed by default.
+describe('ListView check-off undo', () => {
+  let restoreAnimations: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreAnimations?.();
+    restoreAnimations = null;
+    vi.useRealTimers();
+  });
+
+  it('offers an undo on a tapped check-off, the same as a swiped one', async () => {
+    const { store, state } = movingStore([
+      { category: 'Drinks', items: [active({ id: 'beer', name: 'Beer' })] },
+    ]);
+    const { getByRole } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Beer' }));
+    expect(state.checked.map((i) => i.id)).toEqual(['beer']);
+
+    await fireEvent.click(getByRole('button', { name: 'Undo' }));
+    expect(state.checked).toHaveLength(0);
+    expect(state.groups.flatMap((g) => g.items).map((i) => i.id)).toEqual(['beer']);
+  });
+
+  it('retires the undo when the same row is acted on again', async () => {
+    // Check a row off, then un-check it by hand inside the five seconds. The
+    // toast still read "In the basket" and its button called the same toggle —
+    // which now CHECKS IT OFF a second time. An Undo that does the opposite of
+    // undo is worse than no Undo, and taps make this trivially reachable.
+    restoreAnimations = landAnimations();
+    vi.useFakeTimers();
+    const { store, state } = movingStore([
+      { category: 'Drinks', items: [active({ id: 'beer', name: 'Beer' })] },
+    ]);
+    const { getByRole, queryByRole } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Beer' }));
+    expect(getByRole('button', { name: 'Undo' })).toBeTruthy();
+
+    await fireEvent.click(getByRole('button', { name: 'Beer' }));
+    expect(state.checked).toHaveLength(0);
+    // Landed, not merely asked to go: a toast mid-outro is still in the tree
+    // with a live button in it, so asserting absence without running the outro
+    // would pass against a toast that had never been retired at all.
+    await settle(DUR.toastOut);
+    expect(queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('offers nothing on an UNCHECK — there is no consequence to undo', async () => {
+    // Tapping a row in the basket puts it back on the shelf, which is already
+    // the undo. A toast here would be an undo for an undo, and it would sit in
+    // the one slot a real one needs.
+    const { store } = movingStore([], [item({ id: 'beer', name: 'Beer' })]);
+    const { getByRole, queryByRole } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: /in the basket/i }));
+    await fireEvent.click(getByRole('button', { name: 'Beer' }));
+
+    expect(queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+});
+
+// There is one toast slot, and three things want it. Two of them cannot be got
+// back any other way — a delete takes the item's note with it, and clearing the
+// basket takes twelve notes — while a check-off is one tap from undone in the
+// basket drawer. So the cheap one never displaces an expensive one, and nothing
+// is ever left alive-but-hidden with its own clock running out behind a mask.
+describe('ListView undo priority', () => {
+  let restoreAnimations: (() => void) | null = null;
+
+  afterEach(() => {
+    restoreAnimations?.();
+    restoreAnimations = null;
+    vi.useRealTimers();
+  });
+
+  it('will not let a check-off displace the undo for a cleared basket', async () => {
+    // The expensive one. Clearing offers twelve rows back BY NAME AND NOTE —
+    // the notes exist nowhere else once the rows are gone. Ticking one more
+    // thing off used to replace that notice with "in the basket", while the
+    // cleared pile's own five seconds ran out unseen behind it: always masked,
+    // always expiring first, and gone with no signal at all.
+    const { store } = movingStore(
+      [{ category: 'Drinks', items: [active({ id: 'tea', name: 'Tea' })] }],
+      [item({ id: 'beer', name: 'Beer' })],
+    );
+    const { getByRole, getByText } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: /in the basket/i }));
+    await fireEvent.click(getByRole('button', { name: 'Clear' }));
+    expect(getByText('Cleared 1 item')).toBeTruthy();
+
+    await fireEvent.click(getByRole('button', { name: 'Tea' }));
+
+    // Still the cleared basket's, and still the one Undo acts on.
+    expect(getByText('Cleared 1 item')).toBeTruthy();
+    await fireEvent.click(getByRole('button', { name: 'Undo' }));
+    expect(store.add).toHaveBeenCalledWith('Beer', undefined);
+  });
+
+  it('replaces a check-off undo when the basket is then cleared', async () => {
+    // The reverse order, and the reason one slot beats two: the check-off
+    // notice used to sit ON TOP of the freshly-armed clear. Its Undo called
+    // toggle on a row the clear had already removed — `store.toggle` finds
+    // nothing and returns — so the shopper pressed Undo, watched nothing
+    // happen, and saw the toast change its own wording.
+    restoreAnimations = landAnimations();
+    vi.useFakeTimers();
+    const { store } = movingStore(
+      [{ category: 'Drinks', items: [active({ id: 'tea', name: 'Tea' })] }],
+      [item({ id: 'beer', name: 'Beer' })],
+    );
+    const { getByRole, getByText, queryByText } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Tea' }));
+    expect(getByText('Tea in the basket')).toBeTruthy();
+
+    await fireEvent.click(getByRole('button', { name: /in the basket/i }));
+    await fireEvent.click(getByRole('button', { name: 'Clear' }));
+
+    await settle(DUR.toastOut);
+    expect(queryByText('Tea in the basket')).toBeNull();
+    expect(getByText('Cleared 2 items')).toBeTruthy();
+  });
+
+  it('names the row it is offering back', async () => {
+    // A bare "In the basket" is the same sentence whichever row it is about.
+    // Tick off Milk, Bread and Beer in one breath and the notice never changes
+    // — so a shopper correcting the Milk mistap presses Undo and gets BEER
+    // back, having been given nothing to notice with. It is also why a screen
+    // reader announced the first check-off and then went quiet: a live region
+    // whose text does not change does not re-announce.
+    const { store } = movingStore([
+      {
+        category: 'Drinks',
+        items: [active({ id: 'milk', name: 'Milk' }), active({ id: 'beer', name: 'Beer' })],
+      },
+    ]);
+    const { getByRole, getByText } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Milk' }));
+    expect(getByText('Milk in the basket')).toBeTruthy();
+    await fireEvent.click(getByRole('button', { name: 'Beer' }));
+    expect(getByText('Beer in the basket')).toBeTruthy();
+  });
+});
+
 describe('ListView swipe to the basket', () => {
   let restoreWidth: (() => void) | null = null;
+  let restoreAnimations: (() => void) | null = null;
 
   afterEach(() => {
     restoreWidth?.();
     restoreWidth = null;
+    restoreAnimations?.();
+    restoreAnimations = null;
     vi.useRealTimers();
+  });
+
+  it('holds the row on its shelf for the whole slide, not just the strike', async () => {
+    // A tap's confirmation is the strike drawing, so DUR.check is the right
+    // window for it. A right-swipe's confirmation is the row finishing the
+    // journey the thumb threw it on, which takes DUR.swipeCommit — and held for
+    // the shorter one the row is pulled off the shelf with ~40% of its own
+    // slide still to run, which is the check-off equivalent of the destroyed
+    // ItemRow that hold.svelte.ts was built to stop.
+    restoreWidth = stubRowWidth(300);
+    restoreAnimations = landAnimations();
+    vi.useFakeTimers();
+    const { store } = movingStore([
+      { category: 'Drinks', items: [active({ id: 'beer', name: 'Beer' })] },
+    ]);
+    const { container, getByText } = renderShelf(store);
+
+    await swipe(getByText('Beer'), 200);
+    expect(container.querySelector('.shelf .row')).not.toBeNull();
+
+    // Past the point a TAP would have let go, with the slide still running.
+    await settle(DUR.check + 10);
+    expect(container.querySelector('.shelf .row')).not.toBeNull();
+
+    // Past the end of the slide, and the shelf lets it go.
+    await settle(DUR.swipeCommit + DUR.exit);
+    expect(container.querySelector('.shelf .row')).toBeNull();
   });
 
   it('undoes a swipe-to-basket inside the hold window, leaving one row', async () => {
@@ -642,7 +832,8 @@ describe('ListView swipe to the basket', () => {
     const { container, getByText, getByRole } = renderShelf(store);
 
     await swipe(getByText('Beer'), 200);
-    expect(getByText('In the basket')).toBeTruthy();
+    // Named, the same as a tap's — the gesture differs, the notice does not.
+    expect(getByText('Beer in the basket')).toBeTruthy();
     expect(container.querySelector('.shelf .row')!.classList.contains('checked')).toBe(true);
 
     vi.advanceTimersByTime(60);
@@ -655,6 +846,16 @@ describe('ListView swipe to the basket', () => {
     // The hold really was let go, rather than merely out-voted by the store's
     // copy: a row that is still held is the one row in the list taking no swipe.
     expect(rows[0].classList.contains('swipeable')).toBe(true);
+    // ...and the row is VISIBLE. The each-block is keyed by id, so an undo
+    // inside the hold window hands the restored row the very same node the
+    // commit parked off-screen. Everything the slide left on it has to have
+    // gone, or the row comes back as an empty slab — content translated a full
+    // width out under `overflow: hidden`, its tick field still showing, and its
+    // toggle button clipped out of reach, with nothing left to re-render it.
+    const content = rows[0].querySelector('.swipe-content') as HTMLElement;
+    expect(content.style.transform).toBe('');
+    expect(content.style.transition).toBe('');
+    expect(content.classList.contains('swiping')).toBe(false);
     expect(toggle).toHaveBeenCalledTimes(2);
 
     // ...and the abandoned hold's timer must not fire later and re-take the row.
@@ -703,5 +904,57 @@ describe('ListView clearing the basket', () => {
     await settle(DUR.clear + staggerDelay(pile.length - 1) + 60);
     await settle(DUR.collapse);
     expect(container.querySelector('.checked')).toBeNull();
+  });
+});
+
+// Every way of deleting one row offers the same undo. The swipe had one from the
+// start; the sheet's Remove went straight to the store, so a mistap took the item
+// AND retired its shortcut with nothing to press. The shortcut only comes back
+// because the undo re-adds inside the server's stash window — so a missing undo
+// is not a missing convenience, it is a silently permanent loss of that name's
+// history in the tray and in typeahead.
+//
+// The undo lives in the view's `remove` rather than at the call site, so any
+// delete affordance added later inherits it. (ItemRow used to carry a second
+// one — an `x`, shown only when no `onOpen` was given, which no call site could
+// ever reach because both always pass one. It went with this change.)
+describe('ListView single-row delete undo', () => {
+  it('offers an undo when the sheet removes the item, restoring name and note', async () => {
+    const { store, state } = movingStore([
+      { category: 'Drinks', items: [active({ id: 'pk', name: 'Pine Kernels', note: 'the big bag' })] },
+    ]);
+    const { getByRole } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Edit Pine Kernels' }));
+    await fireEvent.click(getByRole('button', { name: 'Remove' }));
+    expect(store.remove).toHaveBeenCalledWith('pk');
+    expect(state.groups.flatMap((g) => g.items)).toHaveLength(0);
+
+    // The sheet closes on remove, so the toast has to belong to the list rather
+    // than to the sheet that has just gone.
+    await fireEvent.click(getByRole('button', { name: 'Undo' }));
+    // By name and note, through the normal add path — the same reversal the
+    // swipe performs, which is what revives the stashed catalogue row.
+    expect(store.add).toHaveBeenCalledWith('Pine Kernels', 'the big bag');
+  });
+
+  it('still offers the undo when the store has already dropped the row', async () => {
+    // The row went while the sheet was open — a partner deleted it, or an SSE
+    // removal raced the tap. An id would have nothing left to look up here, and
+    // the delete would go through with no undo: the one silent path the change
+    // exists to close. The sheet is holding the row, so it hands that over.
+    const { store, state } = movingStore([
+      { category: 'Drinks', items: [active({ id: 'pk', name: 'Pine Kernels', note: 'the big bag' })] },
+    ]);
+    const { getByRole } = renderShelf(store);
+
+    await fireEvent.click(getByRole('button', { name: 'Edit Pine Kernels' }));
+    state.groups = [];
+    await tick();
+    await fireEvent.click(getByRole('button', { name: 'Remove' }));
+
+    expect(store.remove).toHaveBeenCalledWith('pk');
+    await fireEvent.click(getByRole('button', { name: 'Undo' }));
+    expect(store.add).toHaveBeenCalledWith('Pine Kernels', 'the big bag');
   });
 });

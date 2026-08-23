@@ -12,7 +12,9 @@
     item: Item;
     walkOrder: string[];
     onSave: (id: string, fields: { note?: string | null; category?: string }) => Promise<void> | void;
-    onRemove: (id: string) => void;
+    /** Takes the whole row, not its id: deleting one also retires its
+     *  catalogue shortcut, and the undo has to re-add it by name and note. */
+    onRemove: (item: Item) => void;
     onClose: () => void;
   } = $props();
 
@@ -62,7 +64,7 @@
   </label>
 
   <div class="actions">
-    <button class="danger" type="button" onclick={() => { onRemove(item.id); onClose(); }}>Remove</button>
+    <button class="danger" type="button" onclick={() => { onRemove(item); onClose(); }}>Remove</button>
     <div class="spacer"></div>
     <button class="ghost" type="button" onclick={onClose}>Cancel</button>
     <button class="primary" type="button" onclick={save} disabled={saving}>Save</button>

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-23
+
+### Fixed
+
+- **Every way of ticking something off can be undone.** Swiping right offered you an undo;
+  tapping the row — the way most things get ticked off — offered nothing, and getting a mistap
+  back meant opening the basket drawer, which starts closed, and finding the item in it. Both
+  gestures now put the same five-second Undo at the bottom of the screen, and it names the item,
+  so ticking off three things in a row no longer leaves you pressing Undo on whichever one it
+  happened to mean.
+- **An undo notice can no longer quietly take the place of a more important one.** There was one
+  notice at the bottom of the screen and two things using it. Clear the basket and then tick one
+  more thing off, and the offer to put twelve items back was replaced by one about the thing you
+  just ticked — while the twelve counted down to nothing behind it, unseen. Now there is a single
+  notice, so anything it replaces is replaced in front of you, and ticking something off will not
+  displace an offer to undo a delete or a cleared basket: those are the two you cannot get back
+  another way, while a ticked-off item is one tap away in the basket.
+- **Undo does not do the opposite of undo.** Tick something off, then put it back yourself — or
+  let someone else's phone put it back — and the notice used to stay, with a button that would
+  now tick it off again. It steps aside instead.
+
+- **Swiping an item into the basket now finishes the way swiping it away does.** It used to snap
+  back under your thumb the instant you let go, then play a separate little animation — so the
+  gesture that worked looked jerkier than the one that didn't quite. Now the row carries on in the
+  direction you threw it, exactly like a delete. Which way you swipe, the colour behind the row and
+  the icon still tell you which one you did.
+
+- **Remove offers you an undo now, wherever you reach for it.** Deleting an item also stops Trug
+  offering that name as a shortcut, and the only thing that brings it back is putting the item
+  straight back — so the Remove button inside an item now gets the same five-second Undo that
+  swiping has always had. Before, a mistap there quietly took the name out of the frequently-added
+  chips and out of typeahead for good, along with however many shops of history it had behind it.
+
 ## [0.4.0] - 2026-08-15
 
 ### Added
@@ -314,7 +347,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/maxdraki/trug/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maxdraki/trug/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/maxdraki/trug/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/maxdraki/trug/compare/v0.3.0...v0.3.1

@@ -17,7 +17,6 @@
     heldIds = new Set<string>(),
     drag,
     onToggle,
-    onRemove,
     onOpen,
     onSwipeLeft,
     onSwipeRight,
@@ -29,7 +28,6 @@
     heldIds?: Set<string>;
     drag?: DragController;
     onToggle: (id: string) => void;
-    onRemove: (id: string) => void;
     onOpen: (item: Item) => void;
     onSwipeLeft?: (item: Item) => void;
     onSwipeRight?: (item: Item) => void;
@@ -163,7 +161,6 @@
         <ItemRow
           {item}
           {onToggle}
-          {onRemove}
           {onOpen}
           onDragStart={drag && !held ? (it, ev, el) => drag.start(it, category, ev, el) : undefined}
           onSwipeLeft={held ? undefined : onSwipeLeft}

@@ -48,6 +48,21 @@ export function movingStore(groups: Group[], checked: Item[] = []): MovingStore 
     else state.groups = [...state.groups, { category, items: [row] }];
   });
 
+  /** Really takes the row off the list, like the optimistic store's own
+   *  `remove` — so a view that offers an undo is undoing something visible
+   *  rather than talking to a DOM that never moved. */
+  const remove = vi.fn((id: string) => {
+    for (const g of state.groups) {
+      const i = g.items.findIndex((x) => x.id === id);
+      if (i >= 0) {
+        g.items.splice(i, 1);
+        state.groups = state.groups.filter((x) => x.items.length);
+        return;
+      }
+    }
+    state.checked = state.checked.filter((x) => x.id !== id);
+  });
+
   const clearChecked = vi.fn(() => {
     state.checked = [];
   });
@@ -69,7 +84,7 @@ export function movingStore(groups: Group[], checked: Item[] = []): MovingStore 
     retry: vi.fn(),
     add: vi.fn(),
     toggle,
-    remove: vi.fn(),
+    remove,
     reorder: vi.fn(),
     clearChecked,
     applyEvent: vi.fn(),

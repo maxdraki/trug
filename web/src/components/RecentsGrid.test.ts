@@ -5,6 +5,7 @@ import RecentsGrid from './RecentsGrid.svelte';
 import { ApiError } from '../lib/api';
 import { mountWithProps } from '../lib/testing/reactiveProps.svelte';
 import type { CatalogEntry } from '../lib/types';
+import { pointerEvent } from '../lib/testing/pointer';
 
 /** Every real shortcut pill, clipped or not. The counter is not one of them. */
 const PILL = '.pill:not(.more)';
@@ -502,23 +503,12 @@ describe('RecentsGrid two-row cap', () => {
  * delete, so until the gesture below existed they were offered forever.
  */
 
-/** A pointer event as a touchscreen sends it. jsdom has no PointerEvent, and a
- *  MouseEvent carries the coordinates already; the two pointer fields the
- *  handlers read are pinned on afterwards. */
-function touch(type: string, opts: { x?: number; y?: number; id?: number } = {}): MouseEvent {
-  const ev = new MouseEvent(type, { bubbles: true, clientX: opts.x ?? 0, clientY: opts.y ?? 0 });
-  Object.defineProperty(ev, 'pointerType', { value: 'touch' });
-  Object.defineProperty(ev, 'pointerId', { value: opts.id ?? 1 });
-  return ev;
-}
+/** A pointer event as a touchscreen sends it. */
+const touch = (type: string, opts: { x?: number; y?: number; id?: number } = {}) =>
+  pointerEvent(type, { ...opts, pointerType: 'touch' });
 
 /** A pointer event as a mouse sends it — the desktop half of the gesture pair. */
-function mouse(type: string, button = 0): MouseEvent {
-  const ev = new MouseEvent(type, { bubbles: true, cancelable: true, button });
-  Object.defineProperty(ev, 'pointerType', { value: 'mouse' });
-  Object.defineProperty(ev, 'pointerId', { value: 1 });
-  return ev;
-}
+const mouse = (type: string, button = 0) => pointerEvent(type, { pointerType: 'mouse', button });
 
 /** Right-click something the way a browser does: the pointerdown that precedes
  *  the menu, then the menu event itself — which is returned so a test can ask
