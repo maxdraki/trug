@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-06
+
+### Fixed
+
+- **Typing a word that merely contains another item's name added the wrong thing.** Suggestions
+  match anywhere in a name, so typing "gin" in a house that buys ginger offered Ginger — and
+  pressing Enter took it, whether or not you had chosen it. If the offered item was already on the
+  list it was quietly merged, so the screen didn't change and the gin was simply never added.
+  Enter now adds exactly what you typed unless you have picked a suggestion yourself.
+
+### Added
+
+- **The suggestions are keyboard-driven.** Type a few letters, then use ↑ and ↓ to move through
+  what comes up and Enter to take one. Nothing is picked until you pick it, and arrowing off
+  either end of the list hands you back what you were typing, so a stray press costs you nothing.
+  The highlighted row is announced to a screen reader as you move.
+
 ## [0.4.1] - 2026-08-23
 
 ### Fixed
@@ -347,7 +364,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/maxdraki/trug/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/maxdraki/trug/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maxdraki/trug/compare/v0.3.2...v0.4.0
 [0.3.2]: https://github.com/maxdraki/trug/compare/v0.3.1...v0.3.2
