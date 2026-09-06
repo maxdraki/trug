@@ -1,3 +1,8 @@
+<script lang="ts" module>
+  /* Instance counter for listbox/option ids — see `uid` below. */
+  let comboSeq = 0;
+</script>
+
 <script lang="ts">
   import { onDestroy, untrack } from 'svelte';
   import type { CatalogEntry } from '../lib/types';
@@ -28,6 +33,41 @@
   let query = $state('');
   let suggestions = $state<CatalogEntry[]>([]);
   let timer: ReturnType<typeof setTimeout> | undefined;
+
+  /* Which suggestion the arrow keys have landed on, or -1 for "none — Enter
+     takes what was typed".
+
+     -1 is the whole fix for the reported bug. Enter used to commit
+     `suggestions[0]` whether or not the shopper had chosen it, and catalogue
+     search matches substrings (`LIKE %gin%`), so typing "gin" where the
+     household buys ginger offered Ginger first and Enter took it. When the
+     offered row was already on the list the server deduped it and the screen
+     did not change at all: the gin was simply never added, silently. Nothing is
+     chosen now until someone chooses it. */
+  let active = $state(-1);
+
+  /* The query whose suggestions were dismissed with Escape. A response already
+     in flight when Escape lands still matches `query`, so it needs something
+     other than the query itself to know it is unwanted. Cleared by the next
+     keystroke, because typing is a fresh request for suggestions. */
+  let dismissed = '';
+
+  /* Ids for `aria-activedescendant`. Focus never leaves the input — that is
+     what makes this a combobox rather than a menu — so the highlight cannot be
+     carried by focus, and a reader has no other way to be told what the arrow
+     keys just landed on. Counter-based because two add bars on one page would
+     otherwise share ids and point a reader at the wrong list. */
+  const uid = `trug-ac-${++comboSeq}`;
+  let listEl = $state<HTMLElement>();
+
+  /* Keep the highlighted row on screen: the list is capped at 45dvh and
+     scrolls, so arrowing past the fold otherwise moves an invisible selection.
+     `nearest` scrolls the minimum needed and does nothing when it already
+     fits. */
+  $effect(() => {
+    if (active < 0 || !listEl) return;
+    listEl.querySelector(`#${uid}-${active}`)?.scrollIntoView({ block: 'nearest' });
+  });
 
   /**
    * What to say when the mic fails. Every kind speaks, and that is a deliberate
@@ -104,6 +144,11 @@
     onQueryChange?.(query);
     clearTimeout(timer);
     const q = query.trim();
+    // A new keystroke means a new list; a selection made against the old one
+    // would commit whatever happened to land in that slot. It also un-dismisses
+    // the dropdown: typing is asking for suggestions again.
+    active = -1;
+    dismissed = '';
     if (!q) {
       suggestions = [];
       return;
@@ -112,9 +157,28 @@
       try {
         const results = await search(q);
         // Ignore stale responses if the query moved on.
-        if (query.trim() === q) suggestions = results;
-      } catch {
+        if (query.trim() === q && dismissed !== q) {
+          suggestions = results;
+          active = -1;
+        }
+      } catch (err) {
+        // Same staleness guard as the success path, and for a sharper reason: a
+        // rejection from an ABANDONED query used to tear down the list that a
+        // later query had already filled, so the suggestions vanished under a
+        // shopper who was mid-choice. Only the current query may clear them.
+        if (query.trim() !== q) return;
         suggestions = [];
+        // ...and the selection goes with them. Left behind it pointed
+        // `aria-activedescendant` at a row no longer in the document, so a
+        // reader was told the current option was something that had gone.
+        active = -1;
+        // Say nothing to the shopper — a dead typeahead degrades to "type the
+        // name and press Enter", which is the whole list still working, and a
+        // toast per keystroke would be worse than the fault. But leave a trace:
+        // without one, a 500, an expired session and a genuinely empty
+        // catalogue are the same blank dropdown to anyone trying to diagnose
+        // "the suggestions stopped working on my phone".
+        console.warn(`[trug] no suggestions for "${q}"; the list itself is unaffected`, err);
       }
     }, 120);
   }
@@ -127,38 +191,79 @@
     onAdd(value);
     query = '';
     suggestions = [];
+    active = -1;
     onQueryChange?.('');
   }
 
+  /* Step the highlight through a ring whose FIRST rung is the typed text.
+     Arrowing into the list by mistake is then reversible without losing the
+     word — off the top or past the bottom you land back on what you typed,
+     which is how a browser's own address bar behaves. */
+  function move(delta: number) {
+    if (!suggestions.length) return;
+    const rungs = suggestions.length + 1;
+    // Rung 0 is the typed text; rung i is suggestions[i - 1]. Hence the shift
+    // in and back out, and the `+ rungs` so a step below zero still wraps.
+    const rung = (active + 1 + delta + rungs) % rungs;
+    active = rung - 1;
+  }
+
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter') {
+    if (e.key === 'ArrowDown') {
       e.preventDefault();
-      const top = suggestions[0];
-      commit(top ? top.display_name : query);
+      move(1);
+    } else if (e.key === 'ArrowUp') {
+      // Also stops the caret jumping to the start of the input, which would
+      // otherwise happen underneath the list.
+      e.preventDefault();
+      move(-1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      // The load-bearing line of this whole change, and it is deliberately
+      // written to fail SAFE: every torn state — no selection, an index into a
+      // list that has since shrunk or been cleared — lands on `undefined` and
+      // falls back to what the shopper typed. Do not "simplify" this to
+      // `suggestions[active] ?? suggestions[0]`; that is precisely the bug this
+      // exists to fix, where Enter took a suggestion nobody had chosen.
+      const chosen = active >= 0 ? suggestions[active] : undefined;
+      commit(chosen ? chosen.display_name : query);
     } else if (e.key === 'Escape') {
+      // Also drop the pending search. Escape used to clear the list while a
+      // request was still in flight, and `query` is unchanged by it — so the
+      // response passed the staleness guard and reopened the dropdown over the
+      // keyboard about 200ms after the shopper had dismissed it.
+      clearTimeout(timer);
+      dismissed = query.trim();
       suggestions = [];
+      active = -1;
     }
   }
 </script>
 
 <div class="addbar">
   {#if suggestions.length}
-    <ul class="dropdown" role="listbox">
-      {#each suggestions as s (s.name_norm)}
-        <li>
-          <button
-            type="button"
-            role="option"
-            aria-selected="false"
-            onclick={() => commit(s.display_name)}
-          >
-            {#if s.icon && s.icon in ICONS}
-              <span class="ico" aria-hidden="true"><Icon name={s.icon} size={17} stroke={1.75} /></span>
-            {:else if s.icon && !/^[\x20-\x7e]+$/.test(s.icon)}
-              <span class="ico" aria-hidden="true">{s.icon}</span>
-            {/if}
-            <span class="label">{s.display_name}</span>
-          </button>
+    <!-- Options carry the role directly rather than wrapping a button: a
+         listbox's children are its options, and an interactive element inside
+         one is not something a reader can describe. Nothing here needs to take
+         focus — the input keeps it throughout, and the pointer is handled by
+         the click below. -->
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <ul class="dropdown" role="listbox" id={uid} bind:this={listEl}>
+      {#each suggestions as s, i (s.name_norm)}
+        <li
+          class="opt"
+          class:active={i === active}
+          role="option"
+          id="{uid}-{i}"
+          aria-selected={i === active}
+          onclick={() => commit(s.display_name)}
+        >
+          {#if s.icon && s.icon in ICONS}
+            <span class="ico" aria-hidden="true"><Icon name={s.icon} size={17} stroke={1.75} /></span>
+          {:else if s.icon && !/^[\x20-\x7e]+$/.test(s.icon)}
+            <span class="ico" aria-hidden="true">{s.icon}</span>
+          {/if}
+          <span class="label">{s.display_name}</span>
         </li>
       {/each}
     </ul>
@@ -177,6 +282,11 @@
       onkeydown={onKeydown}
       placeholder={speech.listening ? 'Listening…' : 'Add an item…'}
       aria-label="Add an item"
+      role="combobox"
+      aria-expanded={suggestions.length > 0}
+      aria-controls={uid}
+      aria-autocomplete="list"
+      aria-activedescendant={active >= 0 ? `${uid}-${active}` : undefined}
       autocapitalize="off"
       autocomplete="off"
       class:voice={speech.supported}
@@ -251,22 +361,40 @@
   .dropdown li + li {
     border-top: var(--hairline);
   }
-  .dropdown button {
-    width: 100%;
+  .dropdown .opt {
     display: flex;
     align-items: center;
     gap: 10px;
     padding: 11px 12px;
-    border: none;
     border-radius: calc(var(--radius) - 2px);
-    background: none;
     color: var(--ctp-text);
     font-size: 15px;
     text-align: left;
     cursor: pointer;
   }
-  .dropdown button:hover {
+  .dropdown .opt:hover {
     background: var(--ctp-mantle);
+  }
+  /* The arrowed-to row. A surface step alone reads as hover, so the edge says
+     "this is the one Enter takes" — the same 2px tick a freshly-added row
+     wears.
+
+     The edge is not the raw accent, which measured 1.70:1 against this surface
+     in Latte on yellow: the light accents on a light surface vanish into it,
+     exactly as the mic's hover state did. Mixing toward `--ctp-text` is
+     adaptive — it darkens in Latte and lightens in Mocha — and at 40% it holds
+     3.29:1 at its worst (Latte on pink) while still reading as the accent
+     rather than as a plain rule. Tests below pin both this and the label. */
+  /* `--edge` is named so the contrast test can read the colour itself rather
+     than carve it back out of the shadow — moving or blurring the shadow then
+     cannot quietly stop the measurement measuring what it claims to. The
+     comment sits ABOVE the rule, not inside it: the test helper finds a
+     declaration by looking for `^` or `;` before the property, and a comment
+     between the two hides it (which is how this was caught). */
+  .dropdown .opt.active {
+    --edge: color-mix(in srgb, var(--accent) 40%, var(--ctp-text));
+    background: var(--ctp-surface0);
+    box-shadow: inset 2px 0 0 var(--edge);
   }
   .ico {
     display: inline-flex;

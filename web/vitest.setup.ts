@@ -50,6 +50,20 @@ if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   });
 }
 
+// The other half of what the comment below promises. jsdom has no
+// `scrollIntoView`, and the add bar's typeahead calls it to keep the arrowed-to
+// suggestion on screen. Without this the effect throws on every arrow press —
+// which vitest reports as an unhandled ERROR rather than a failed assertion, so
+// the run exits 1 while the summary still reads "666 passed". It also meant the
+// scroll path was never exercised at all.
+if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    configurable: true,
+    writable: true,
+    value: () => {},
+  });
+}
+
 // jsdom implements neither the Web Animations API nor scrollIntoView; Svelte 5
 // drives `transition:`/`animate:` directives through `element.animate`, so any
 // component that mounts one (e.g. an aisle's row FLIP) throws in jsdom without a
