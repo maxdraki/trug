@@ -531,7 +531,9 @@
     justify-content: flex-start;
     padding-left: calc(20px + var(--shelf-gutter, 0px));
     background: color-mix(in srgb, var(--accent) 14%, transparent);
-    color: var(--accent);
+    /* Ink, not the raw accent: raw, Latte's yellow tick on this wash measured
+       2.27:1, under the 3:1 a graphic needs. */
+    color: var(--accent-ink);
   }
   .swipe-field.trash {
     justify-content: flex-end;
@@ -616,8 +618,12 @@
     text-align: left;
     cursor: pointer;
   }
-  /* The chip: a quiet rounded square one surface step above the ground the row
-     is lying on, with a text-coloured 2px line icon on a 24px grid. */
+  /* The chip: the icon's slot. It used to be a rounded square one surface step
+     above the shelf; the square went (a grey tile per row was a lot of the grey
+     the list read as) and the icon now stands straight on the shelf, the way a
+     Material list item's leading icon does. The slot keeps its size, because it
+     is what sets the row's height and it is still the drag handle — only the
+     paint is gone. */
   .chip {
     flex: 0 0 auto;
     width: var(--row-chip);
@@ -625,41 +631,31 @@
     border-radius: var(--radius);
     display: grid;
     place-items: center;
-    background: color-mix(in srgb, var(--ctp-surface0) 55%, var(--ctp-base));
     color: var(--ctp-text);
     font-size: 19px;
     line-height: 1;
     transform-origin: center;
   }
-  /* No icon resolved, so the chip shows the name's first letter. It joins the
-     accent scope below by the FILL rather than the glyph, and that swap is the
-     whole rule: a line icon is a graphic (3:1), a letter is text (4.5:1), and
-     accent-on-accent-wash does not clear 4.5:1 in Latte for any accent Settings
-     offers — 2.03:1 on yellow and pink, 2.23 peach, 2.52 green, 3.53 blue,
-     3.83 mauve, and no darker mix of the accent rescues it either (accent 55%
-     into text still measures 3.3–3.7 on peach, green, pink and yellow). It used
-     to be lavender-on-lavender, which failed the same way (2.43:1 in Latte) AND
-     picked a hue with nothing to do with the shopper's accent, so a perfectly
-     ordinary fallback read as a bug.
-
-     So: the accent washes the square, and the letter stays --ctp-text, which is
-     what `.chip` already sets — hence no `color` here. Measured 5.56:1 at worst
-     (Frappé/yellow) across all four flavours × all six accents; see the
-     contrast test in ItemRow.test.ts, which reads these declarations. Same 16%
-     wash the chip's ink fill weighs in at, so it is one family, one weight, one
-     step off the row. */
+  /* No icon resolved, so the chip shows the name's first letter, in the same
+     accent ink as the icons beside it so a letter reads as an icon that has not
+     been found yet rather than a different kind of thing. A letter is text, so
+     it takes the ink (4.5:1) rather than the raw accent a graphic could get away
+     with — the raw accent on Latte's white shelf is around 2:1. Measured for
+     every flavour and accent in lib/accentInk.test.ts. */
   .chip.monogram {
-    background: color-mix(in srgb, var(--accent) 16%, var(--ctp-base));
+    color: var(--accent-ink);
     font-family: var(--font-display);
     font-weight: 500;
-    font-size: 15px;
+    font-size: 17px;
   }
-  /* Accent scope (variant B): an ACTIVE item's line-icon chip glyph is the
-     accent — "still to get". The chip square background stays ink; `color`
-     inherits into the child <Icon> svg (stroke="currentColor"). Checked rows
-     are overridden below by `.row.checked .chip` (higher specificity). */
+  /* An ACTIVE item's icon is the accent: "still to get". Ink rather than the raw
+     accent, for the same reason as the letter: with no square behind it the
+     icon sits on the shelf itself, where Latte's raw yellow and peach fall
+     under even the 3:1 a graphic needs. `color` inherits into the child <Icon>
+     svg (stroke="currentColor"). Checked rows are overridden below by
+     `.row.checked .chip` (higher specificity). */
   .chip.line {
-    color: var(--accent);
+    color: var(--accent-ink);
   }
   /* Name over note, packed tight enough that the pair still fits inside the
      chip's box. Row height is max(chip, this stack) + padding, so keeping the
@@ -730,8 +726,6 @@
     color: var(--ctp-subtext1);
   }
   .row.checked .chip {
-    background: transparent;
-    border: var(--hairline);
     color: var(--ctp-overlay1);
     opacity: 0.5;
     filter: grayscale(1);

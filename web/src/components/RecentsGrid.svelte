@@ -714,9 +714,9 @@
      A FAILED forget is not shown here; it goes to the shell's error toast, for
      the reasons given on the `onError` prop. -->
 {#if forgotten}
-  <Toast variant="neutral">
+  <Toast variant="undo">
     <span>Forgot “{forgotten.display_name}”</span>
-    <button class="undo-btn" type="button" bind:this={undoEl} onclick={undoForget}>Undo</button>
+    <button type="button" bind:this={undoEl} onclick={undoForget}>Undo</button>
   </Toast>
 {/if}
 
@@ -742,17 +742,6 @@
     font-weight: 400;
     color: var(--ctp-overlay0);
   }
-  /* Matches ListView's undo affordance, which is the only other place in the
-     app that offers one. */
-  .undo-btn {
-    flex: 0 0 auto;
-    background: none;
-    border: none;
-    color: var(--accent);
-    font-weight: 600;
-    font-size: 15px;
-    cursor: pointer;
-  }
   /* A slim tray, not a shelf card: pills that wrap onto a second line rather
      than scrolling sideways, so the shortcuts on offer are the ones you can
      see — nothing hidden past a right edge that gives no sign there is more
@@ -774,17 +763,19 @@
   }
   /* Each pill is its item's full name — never truncated. Sized by its text, so
      "Sea Salt" stays small and "Extra-virgin Olive Oil" simply takes the room
-     it needs. Accent-tinted: these are things you'll likely need, the same
-     reading the accent carries on active rows. */
+     it needs. Accent-tinted, and more strongly than the aisle bands: these are
+     offers — things you'll likely need — and should read as something to tap,
+     not as more of the list. The label stays --ctp-text, so the wash can be
+     this strong and still clear 4.5:1 (measured in lib/accentInk.test.ts). */
   .pill {
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     min-height: 34px;
     padding: 6px 12px;
-    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 5%, var(--ctp-base));
+    background: color-mix(in srgb, var(--accent) 20%, var(--ctp-base));
     /* The accent tints the border and fill, never the label. Accent-tinted text
        failed 4.5:1 on Latte for most accents (peach 3.39, yellow 3.01 at rest;
        worse on hover), and contrast must not depend on which accent you picked. */
@@ -809,9 +800,12 @@
     -webkit-touch-callout: none;
     transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease;
   }
+  /* 24% is the strongest hover that keeps the label at 4.5:1 everywhere:
+     Frappé's light text on its yellow accent is the tight case (4.61:1 here,
+     4.44 at 26%). */
   .pill:hover {
-    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
-    background: color-mix(in srgb, var(--accent) 10%, var(--ctp-base));
+    border-color: color-mix(in srgb, var(--accent) 75%, transparent);
+    background: color-mix(in srgb, var(--accent) 24%, var(--ctp-base));
   }
   /* Past the second row. `display: none` rather than a visual trick: these are
      real buttons, and a hidden shortcut must be out of the tab order and out of

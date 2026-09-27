@@ -328,7 +328,7 @@
     border-radius: var(--radius);
     border: var(--hairline);
     border-color: color-mix(in srgb, var(--accent) 30%, var(--ctp-surface0));
-    background: color-mix(in srgb, var(--accent) 10%, var(--ctp-base));
+    background: var(--field-fill);
     color: var(--ctp-text);
     box-shadow: var(--shadow-2);
     transition: border-color 120ms ease;
@@ -387,10 +387,7 @@
      rather than as a plain rule. Tests below pin both this and the label. */
   /* `--edge` is named so the contrast test can read the colour itself rather
      than carve it back out of the shadow — moving or blurring the shadow then
-     cannot quietly stop the measurement measuring what it claims to. The
-     comment sits ABOVE the rule, not inside it: the test helper finds a
-     declaration by looking for `^` or `;` before the property, and a comment
-     between the two hides it (which is how this was caught). */
+     cannot quietly stop the measurement measuring what it claims to. */
   .dropdown .opt.active {
     --edge: color-mix(in srgb, var(--accent) 40%, var(--ctp-text));
     background: var(--ctp-surface0);

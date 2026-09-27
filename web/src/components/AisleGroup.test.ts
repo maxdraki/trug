@@ -1,5 +1,6 @@
 import { render } from '@testing-library/svelte';
 import { describe, it, expect, vi } from 'vitest';
+import fs from 'node:fs';
 import AisleGroup from './AisleGroup.svelte';
 import type { DragController } from '../lib/drag.svelte';
 import type { Item } from '../lib/types';
@@ -144,5 +145,20 @@ describe('AisleGroup shelf label', () => {
     const { container } = render(AisleGroup, props(controller({})));
     expect(container.querySelector('h2 .count')!.getAttribute('aria-hidden')).toBeNull();
     expect(container.querySelector('h2')!.textContent!.replace(/\s+/g, ' ')).toContain('Drinks 2');
+  });
+});
+
+// Latte arrives two ways — chosen in Settings, or by the OS with nothing chosen
+// — so its overrides exist twice in app.css. They have to stay one list.
+describe('Latte overrides', () => {
+  it('are identical whichever way Latte was chosen', () => {
+    const css = fs.readFileSync(new URL('../app.css', '' + import.meta.url), 'utf8');
+    const norm = (b = '') => b.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\s+/g, ' ').trim();
+    const explicit = norm(/:root\[data-flavour='latte'\]\s*\{([^}]*)\}/.exec(css)?.[1]);
+    const system = norm(
+      /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-flavour\]\)\s*\{([^}]*)\}/.exec(css)?.[1],
+    );
+    expect(explicit).not.toBe('');
+    expect(system).toBe(explicit);
   });
 });

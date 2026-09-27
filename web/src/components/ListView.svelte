@@ -475,9 +475,9 @@
 </div>
 
 {#if swipeUndo}
-  <Toast variant="neutral">
+  <Toast variant="undo">
     <span>{swipeUndo.text}</span>
-    <button class="undo-btn" type="button" onclick={runSwipeUndo}>Undo</button>
+    <button type="button" onclick={runSwipeUndo}>Undo</button>
   </Toast>
 {/if}
 
@@ -665,14 +665,5 @@
   }
   .rows > :global(.row-wrap + .row-wrap) {
     border-top: var(--hairline);
-  }
-  .undo-btn {
-    flex: 0 0 auto;
-    background: none;
-    border: none;
-    color: var(--accent);
-    font-weight: 600;
-    font-size: 15px;
-    cursor: pointer;
   }
 </style>

@@ -27,6 +27,34 @@
   --ctp-base: #1e1e2e;
   --ctp-mantle: #181825;
   --ctp-crust: #11111b;
+  --ink-rosewater: #f5e0dc;
+  --inverse-ink-rosewater: #795252;
+  --ink-flamingo: #f2cdcd;
+  --inverse-ink-flamingo: #814d54;
+  --ink-pink: #f5c2e7;
+  --inverse-ink-pink: #804879;
+  --ink-mauve: #cba6f7;
+  --inverse-ink-mauve: #7534cc;
+  --ink-red: #f38ba8;
+  --inverse-ink-red: #b51137;
+  --ink-maroon: #eba0ac;
+  --inverse-ink-maroon: #9e3746;
+  --ink-peach: #fab387;
+  --inverse-ink-peach: #92421c;
+  --ink-yellow: #f9e2af;
+  --inverse-ink-yellow: #7b5426;
+  --ink-green: #a6e3a1;
+  --inverse-ink-green: #31672c;
+  --ink-teal: #94e2d5;
+  --inverse-ink-teal: #1a646e;
+  --ink-sky: #89dceb;
+  --inverse-ink-sky: #11628a;
+  --ink-sapphire: #74c7ec;
+  --inverse-ink-sapphire: #1f6477;
+  --ink-blue: #89b4fa;
+  --inverse-ink-blue: #1e53c1;
+  --ink-lavender: #b4befe;
+  --inverse-ink-lavender: #4b579e;
 }
 
 [data-flavour="latte"] {
@@ -53,9 +81,37 @@
   --ctp-surface2: #acb0be;
   --ctp-surface1: #bcc0cc;
   --ctp-surface0: #ccd0da;
-  --ctp-base: #eff1f5;
-  --ctp-mantle: #e6e9ef;
-  --ctp-crust: #dce0e8;
+  --ctp-base: #fdfdfe;
+  --ctp-mantle: #f4f5f8;
+  --ctp-crust: #e8ebf0;
+  --ink-rosewater: #7a626e;
+  --inverse-ink-rosewater: #f5e0dc;
+  --ink-flamingo: #835f6f;
+  --inverse-ink-flamingo: #f2cdcd;
+  --ink-pink: #7f5b88;
+  --inverse-ink-pink: #f5c2e7;
+  --ink-mauve: #803cdc;
+  --inverse-ink-mauve: #d6b9f9;
+  --ink-red: #c2173f;
+  --inverse-ink-red: #f7b4c7;
+  --ink-maroon: #a2495d;
+  --inverse-ink-maroon: #efb6c0;
+  --ink-peach: #935743;
+  --inverse-ink-peach: #fab68c;
+  --ink-yellow: #7e644f;
+  --inverse-ink-yellow: #f9e2af;
+  --ink-green: #47714f;
+  --inverse-ink-green: #a6e3a1;
+  --ink-teal: #336f80;
+  --inverse-ink-teal: #94e2d5;
+  --ink-sky: #346c93;
+  --inverse-ink-sky: #89dceb;
+  --ink-sapphire: #3b6d86;
+  --inverse-ink-sapphire: #87cfef;
+  --ink-blue: #2b60ce;
+  --inverse-ink-blue: #a7c7fb;
+  --ink-lavender: #5a64a1;
+  --inverse-ink-lavender: #b8c2fe;
 }
 
 [data-flavour="frappe"] {
@@ -85,6 +141,34 @@
   --ctp-base: #303446;
   --ctp-mantle: #292c3c;
   --ctp-crust: #232634;
+  --ink-rosewater: #f2d5cf;
+  --inverse-ink-rosewater: #6a5157;
+  --ink-flamingo: #eebebe;
+  --inverse-ink-flamingo: #724e59;
+  --ink-pink: #f4b8e4;
+  --inverse-ink-pink: #6f4a73;
+  --ink-mauve: #ca9ee6;
+  --inverse-ink-mauve: #6e38bc;
+  --ink-red: #e4888d;
+  --inverse-ink-red: #ab183c;
+  --ink-maroon: #ea999c;
+  --inverse-ink-maroon: #8f3d4d;
+  --ink-peach: #ef9f76;
+  --inverse-ink-peach: #82472e;
+  --ink-yellow: #e5c890;
+  --inverse-ink-yellow: #6c5338;
+  --ink-green: #a6d189;
+  --inverse-ink-green: #37613b;
+  --ink-teal: #81c8be;
+  --inverse-ink-teal: #255f6c;
+  --ink-sky: #99d1db;
+  --inverse-ink-sky: #205d7f;
+  --ink-sapphire: #85c1dc;
+  --inverse-ink-sapphire: #2a5f72;
+  --ink-blue: #8caaee;
+  --inverse-ink-blue: #2553b3;
+  --ink-lavender: #babbf1;
+  --inverse-ink-lavender: #4a558f;
 }
 
 [data-flavour="macchiato"] {
@@ -114,6 +198,34 @@
   --ctp-base: #24273a;
   --ctp-mantle: #1e2030;
   --ctp-crust: #181926;
+  --ink-rosewater: #f4dbd6;
+  --inverse-ink-rosewater: #715154;
+  --ink-flamingo: #f0c6c6;
+  --inverse-ink-flamingo: #794c57;
+  --ink-pink: #f5bde6;
+  --inverse-ink-pink: #774877;
+  --ink-mauve: #c6a0f6;
+  --inverse-ink-mauve: #7235c7;
+  --ink-red: #ed8796;
+  --inverse-ink-red: #b31339;
+  --ink-maroon: #ee99a0;
+  --inverse-ink-maroon: #983949;
+  --ink-peach: #f5a97f;
+  --inverse-ink-peach: #8d4423;
+  --ink-yellow: #eed49f;
+  --inverse-ink-yellow: #73522e;
+  --ink-green: #a6da95;
+  --inverse-ink-green: #326433;
+  --ink-teal: #8bd5ca;
+  --inverse-ink-teal: #1d636f;
+  --ink-sky: #91d7e3;
+  --inverse-ink-sky: #165e85;
+  --ink-sapphire: #7dc4e4;
+  --inverse-ink-sapphire: #226175;
+  --ink-blue: #8aadf4;
+  --inverse-ink-blue: #2053bd;
+  --ink-lavender: #b7bdf8;
+  --inverse-ink-lavender: #495598;
 }
 
 :root:not([data-flavour]) {
@@ -143,6 +255,34 @@
   --ctp-base: #1e1e2e;
   --ctp-mantle: #181825;
   --ctp-crust: #11111b;
+  --ink-rosewater: #f5e0dc;
+  --inverse-ink-rosewater: #795252;
+  --ink-flamingo: #f2cdcd;
+  --inverse-ink-flamingo: #814d54;
+  --ink-pink: #f5c2e7;
+  --inverse-ink-pink: #804879;
+  --ink-mauve: #cba6f7;
+  --inverse-ink-mauve: #7534cc;
+  --ink-red: #f38ba8;
+  --inverse-ink-red: #b51137;
+  --ink-maroon: #eba0ac;
+  --inverse-ink-maroon: #9e3746;
+  --ink-peach: #fab387;
+  --inverse-ink-peach: #92421c;
+  --ink-yellow: #f9e2af;
+  --inverse-ink-yellow: #7b5426;
+  --ink-green: #a6e3a1;
+  --inverse-ink-green: #31672c;
+  --ink-teal: #94e2d5;
+  --inverse-ink-teal: #1a646e;
+  --ink-sky: #89dceb;
+  --inverse-ink-sky: #11628a;
+  --ink-sapphire: #74c7ec;
+  --inverse-ink-sapphire: #1f6477;
+  --ink-blue: #89b4fa;
+  --inverse-ink-blue: #1e53c1;
+  --ink-lavender: #b4befe;
+  --inverse-ink-lavender: #4b579e;
 }
 
 @media (prefers-color-scheme: light) {
@@ -170,29 +310,115 @@
     --ctp-surface2: #acb0be;
     --ctp-surface1: #bcc0cc;
     --ctp-surface0: #ccd0da;
-    --ctp-base: #eff1f5;
-    --ctp-mantle: #e6e9ef;
-    --ctp-crust: #dce0e8;
+    --ctp-base: #fdfdfe;
+    --ctp-mantle: #f4f5f8;
+    --ctp-crust: #e8ebf0;
+    --ink-rosewater: #7a626e;
+    --inverse-ink-rosewater: #f5e0dc;
+    --ink-flamingo: #835f6f;
+    --inverse-ink-flamingo: #f2cdcd;
+    --ink-pink: #7f5b88;
+    --inverse-ink-pink: #f5c2e7;
+    --ink-mauve: #803cdc;
+    --inverse-ink-mauve: #d6b9f9;
+    --ink-red: #c2173f;
+    --inverse-ink-red: #f7b4c7;
+    --ink-maroon: #a2495d;
+    --inverse-ink-maroon: #efb6c0;
+    --ink-peach: #935743;
+    --inverse-ink-peach: #fab68c;
+    --ink-yellow: #7e644f;
+    --inverse-ink-yellow: #f9e2af;
+    --ink-green: #47714f;
+    --inverse-ink-green: #a6e3a1;
+    --ink-teal: #336f80;
+    --inverse-ink-teal: #94e2d5;
+    --ink-sky: #346c93;
+    --inverse-ink-sky: #89dceb;
+    --ink-sapphire: #3b6d86;
+    --inverse-ink-sapphire: #87cfef;
+    --ink-blue: #2b60ce;
+    --inverse-ink-blue: #a7c7fb;
+    --ink-lavender: #5a64a1;
+    --inverse-ink-lavender: #b8c2fe;
   }
 }
 
 :root {
   --accent: var(--ctp-peach);
+  --accent-ink: var(--ink-peach);
+  --accent-inverse-ink: var(--inverse-ink-peach);
 }
-[data-accent="rosewater"] { --accent: var(--ctp-rosewater); }
-[data-accent="flamingo"] { --accent: var(--ctp-flamingo); }
-[data-accent="pink"] { --accent: var(--ctp-pink); }
-[data-accent="mauve"] { --accent: var(--ctp-mauve); }
-[data-accent="red"] { --accent: var(--ctp-red); }
-[data-accent="maroon"] { --accent: var(--ctp-maroon); }
-[data-accent="peach"] { --accent: var(--ctp-peach); }
-[data-accent="yellow"] { --accent: var(--ctp-yellow); }
-[data-accent="green"] { --accent: var(--ctp-green); }
-[data-accent="teal"] { --accent: var(--ctp-teal); }
-[data-accent="sky"] { --accent: var(--ctp-sky); }
-[data-accent="sapphire"] { --accent: var(--ctp-sapphire); }
-[data-accent="blue"] { --accent: var(--ctp-blue); }
-[data-accent="lavender"] { --accent: var(--ctp-lavender); }
+[data-accent="rosewater"] {
+  --accent: var(--ctp-rosewater);
+  --accent-ink: var(--ink-rosewater);
+  --accent-inverse-ink: var(--inverse-ink-rosewater);
+}
+[data-accent="flamingo"] {
+  --accent: var(--ctp-flamingo);
+  --accent-ink: var(--ink-flamingo);
+  --accent-inverse-ink: var(--inverse-ink-flamingo);
+}
+[data-accent="pink"] {
+  --accent: var(--ctp-pink);
+  --accent-ink: var(--ink-pink);
+  --accent-inverse-ink: var(--inverse-ink-pink);
+}
+[data-accent="mauve"] {
+  --accent: var(--ctp-mauve);
+  --accent-ink: var(--ink-mauve);
+  --accent-inverse-ink: var(--inverse-ink-mauve);
+}
+[data-accent="red"] {
+  --accent: var(--ctp-red);
+  --accent-ink: var(--ink-red);
+  --accent-inverse-ink: var(--inverse-ink-red);
+}
+[data-accent="maroon"] {
+  --accent: var(--ctp-maroon);
+  --accent-ink: var(--ink-maroon);
+  --accent-inverse-ink: var(--inverse-ink-maroon);
+}
+[data-accent="peach"] {
+  --accent: var(--ctp-peach);
+  --accent-ink: var(--ink-peach);
+  --accent-inverse-ink: var(--inverse-ink-peach);
+}
+[data-accent="yellow"] {
+  --accent: var(--ctp-yellow);
+  --accent-ink: var(--ink-yellow);
+  --accent-inverse-ink: var(--inverse-ink-yellow);
+}
+[data-accent="green"] {
+  --accent: var(--ctp-green);
+  --accent-ink: var(--ink-green);
+  --accent-inverse-ink: var(--inverse-ink-green);
+}
+[data-accent="teal"] {
+  --accent: var(--ctp-teal);
+  --accent-ink: var(--ink-teal);
+  --accent-inverse-ink: var(--inverse-ink-teal);
+}
+[data-accent="sky"] {
+  --accent: var(--ctp-sky);
+  --accent-ink: var(--ink-sky);
+  --accent-inverse-ink: var(--inverse-ink-sky);
+}
+[data-accent="sapphire"] {
+  --accent: var(--ctp-sapphire);
+  --accent-ink: var(--ink-sapphire);
+  --accent-inverse-ink: var(--inverse-ink-sapphire);
+}
+[data-accent="blue"] {
+  --accent: var(--ctp-blue);
+  --accent-ink: var(--ink-blue);
+  --accent-inverse-ink: var(--inverse-ink-blue);
+}
+[data-accent="lavender"] {
+  --accent: var(--ctp-lavender);
+  --accent-ink: var(--ink-lavender);
+  --accent-inverse-ink: var(--inverse-ink-lavender);
+}
 [data-accent="text"] { --accent: var(--ctp-text); }
 [data-accent="subtext1"] { --accent: var(--ctp-subtext1); }
 [data-accent="subtext0"] { --accent: var(--ctp-subtext0); }
