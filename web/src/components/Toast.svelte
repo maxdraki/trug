@@ -6,9 +6,10 @@
     variant = 'neutral',
     children,
   }: {
-    /** 'accent' draws an accent left border (e.g. ring arrivals); 'neutral' for
-        undo and other system toasts. */
-    variant?: 'accent' | 'neutral';
+    /** 'accent' draws an accent left border (ring arrivals); 'undo' is the
+        inverse snackbar that offers something back; 'neutral' for everything
+        else the app has to say. */
+    variant?: 'accent' | 'neutral' | 'undo';
     children: Snippet;
   } = $props();
 </script>
@@ -53,5 +54,41 @@
     justify-content: center;
     text-align: center;
     font-weight: 500;
+  }
+  /* Undo, as Material's snackbar: the surface inverted, so it reads as the one
+     thing on screen that is not part of the list — a light bar in the dark
+     flavours, a dark one in Latte. The old undo notice was a base card with a
+     hairline, the same stuff as the shelf, and at a glance it was one more row.
+     No stripe and no hairline: the inversion is the edge. */
+  .toast.undo {
+    border: none;
+    background: var(--ctp-text);
+    color: var(--ctp-base);
+  }
+  /* The action. Its styles lived in each component that raised an undo, as two
+     identical copies; they live with the notice now. The accent's inverse ink
+     reads at 4.5:1 on the inverted ground (theme.css --inverse-ink-*), as
+     Material's inverse primary does. Measured in lib/accentInk.test.ts. */
+  .toast.undo :global(button) {
+    flex: 0 0 auto;
+    margin: -8px -8px -8px 0;
+    padding: 8px 10px;
+    background: none;
+    border: none;
+    border-radius: var(--radius);
+    color: var(--accent-inverse-ink);
+    font: inherit;
+    font-weight: 600;
+    font-size: 15px;
+    cursor: pointer;
+  }
+  /* The app's focus ring is the accent, and on this inverted ground the accent
+     all but vanishes: 1.0–1.5:1 in the dark flavours, under 2.7:1 in Latte,
+     where a focus indicator needs 3:1. The tray moves focus onto Undo on
+     purpose after a keyboard "forget", so that is exactly the moment the ring
+     cannot be allowed to disappear. The inverse ink already reads here by
+     construction. */
+  .toast.undo :global(button:focus-visible) {
+    outline-color: var(--accent-inverse-ink);
   }
 </style>

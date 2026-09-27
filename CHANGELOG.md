@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-27
+
+### Changed
+
+- **A whiter light theme.** Latte's backgrounds are lifted toward white, so the list reads crisp in
+  daylight instead of pale grey-blue. Only the backgrounds moved: your accent, the icons and the text
+  are the colours they were.
+- **Your accent does more of the talking.** Aisle names and their icons are now in your accent colour,
+  on bands with a light wash of it, and item icons sit straight on the row without a grey square
+  behind each one. The rows are the same height and you can still drag an item by its icon. In the
+  light theme the accent is deepened just enough to stay readable at text size; in the dark themes it
+  is your accent exactly.
+- **Frequently added stands out.** The shortcut pills above the list carry a stronger tint, so they
+  read as suggestions to tap rather than as more of the list.
+- **Undo is easier to spot.** The undo notice is now a dark bar in the light theme and a light one in
+  the dark themes, set apart from the list rather than looking like one more row, with Undo in your
+  accent.
+
+### Fixed
+
+- **A few small things were a touch too faint in the light theme.** Item notes measured 4.37:1 and
+  the item count beside each aisle name 3.9:1, against the 4.5:1 minimum for text their size; the tick
+  that appears as you swipe an item into the basket was as low as 2.27:1 on a yellow accent. All three
+  now read clearly.
+- **Keyboard focus is visible on Undo.** After forgetting a shortcut from the keyboard, focus moves to
+  Undo, and on the new undo bar the usual focus ring would have been close to invisible. It now uses a
+  colour that shows up against the bar.
+
 ## [0.4.2] - 2026-09-06
 
 ### Fixed
@@ -364,7 +392,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Single-container deployment via Docker, Docker Compose, and Railway, with a
   multi-arch (`amd64` + `arm64`) image published to GHCR on tagged releases.
 
-[Unreleased]: https://github.com/maxdraki/trug/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/maxdraki/trug/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/maxdraki/trug/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/maxdraki/trug/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/maxdraki/trug/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/maxdraki/trug/compare/v0.3.2...v0.4.0

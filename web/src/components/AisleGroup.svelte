@@ -209,10 +209,12 @@
     font-weight: 500;
     text-transform: uppercase;
     letter-spacing: 0.12em;
-    /* subtext1 on the band's own ground, which is mantle (--band-fill), not the
-       base the rows lie on: 5.14:1 in Latte, and Latte is the tight one — every
-       dark flavour is far clear of the floor. */
-    color: var(--ctp-subtext1);
+    /* The accent, as ink: the aisle name is what you navigate the shop by, and
+       it now carries the colour that means "still to get". Ink rather than the
+       raw accent, because the name is small text and Latte's raw accents fall
+       well under 4.5:1 on the band; see --ink-* in theme.css. Measured for every
+       flavour and accent in lib/accentInk.test.ts. */
+    color: var(--accent-ink);
     /* The only fill in the list body (see --band-fill). It also has to be opaque
        now that the band is sticky — a tint would let the rows it covers read
        straight through it. */
@@ -239,11 +241,18 @@
     color: var(--ctp-text);
     border-bottom-color: var(--ctp-subtext1);
   }
-  /* Shelf-label icons carry the accent (variant B): the aisle marker is part of
-     the "still to get" family, matching the active-row chip glyphs. */
+  /* The tally beside the name. The shared app.css rule's subtext0 is right for
+     the basket's count, but on an aisle's accent-washed band it measured under
+     4.5:1 in Latte (3.93:1 at worst, and 3.79 before the band was tinted), so
+     here it takes one step darker. */
+  h2 .count {
+    color: var(--ctp-subtext1);
+  }
+  /* The aisle marker wears the same accent ink as the name it sits beside and
+     the item icons beneath it. */
   .cat-ico {
     display: inline-flex;
-    color: var(--accent);
+    color: var(--accent-ink);
   }
   .rows {
     display: flex;

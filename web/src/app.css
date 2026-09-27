@@ -36,11 +36,16 @@
      flavour has — separated by hairlines, so the band is the only thing left
      that groups them, and it has to carry that on its own now the card edges are
      gone. It steps one rung DOWN the ladder to mantle, the surface the header
-     and the add bar already sit on, with a whisper of accent for warmth. The old
-     treatment was 3% accent over base: that was a tint on a card, and full-bleed
-     it disappeared — two surfaces a shade apart with no edge to tell them
-     apart. */
-  --band-fill: color-mix(in srgb, var(--accent) 5%, var(--ctp-mantle));
+     and the add bar already sit on, washed with the accent. 10% reads as a
+     coloured band behind the accent-coloured aisle name while staying quieter
+     than the frequently-added pills above the list, which carry the stronger
+     wash: a 3% wash disappeared at full bleed, 5% read as grey, 14% competed
+     with the pills and 22% was loud. The header ink is computed against this
+     exact band (BAND_TINT in scripts/gen-theme.mjs), so the two move together. */
+  --band-fill: color-mix(in srgb, var(--accent) 10%, var(--ctp-mantle));
+  /* The add bar's field: the same whisper of accent, a notch stronger, so the
+     one place you type reads as the place to type. Latte drops it (below). */
+  --field-fill: color-mix(in srgb, var(--accent) 10%, var(--ctp-base));
   /* Near-imperceptible shadow, tinted from crust (never full-alpha black in
      light flavours). The keyword black appears only inside this mix. */
   --shadow-tint: color-mix(in srgb, var(--ctp-crust) 55%, black);
@@ -79,6 +84,23 @@
      between two aisles. */
   --aisle-head-pad: 10px 12px 8px;
   --aisle-head-size: 13px;
+}
+
+/* Latte runs white rather than pastel. Its grounds are already lifted toward
+   white in theme.css (scripts/gen-theme.mjs), and the add bar's field comes
+   off its accent wash, because on a white page a 10% peach field reads as a
+   pastel pill. The aisle bands keep theirs: they carry the accent-coloured
+   headers, and the header ink is computed to read on the tinted band.
+
+   Declared twice because Latte arrives twice: chosen in Settings, or picked by
+   the OS when nothing is chosen. A test holds the two copies together. */
+:root[data-flavour='latte'] {
+  --field-fill: var(--ctp-base);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-flavour]) {
+    --field-fill: var(--ctp-base);
+  }
 }
 
 /* Dense: ~15 rows a screen instead of ~11, for a big Saturday list. Rows land

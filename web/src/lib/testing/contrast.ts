@@ -126,22 +126,63 @@ export function palette(flavour: string): Record<string, string> {
   return vars;
 }
 
-/** A flavour's palette with `--accent` bound to one of its hues. */
+/**
+ * The custom properties app.css declares for `flavour`: its `:root` tokens, with
+ * the Latte block laid over them for Latte. Comments are stripped first, for
+ * the same reason `declaration()` strips them.
+ */
+function appTokens(flavour: string): Record<string, string> {
+  const css = fs
+    .readFileSync(new URL('../../app.css', '' + import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const read = (re: RegExp) => {
+    const out: Record<string, string> = {};
+    const body = re.exec(css)?.[1] ?? '';
+    for (const m of body.matchAll(/--([\w-]+):\s*([^;]+);/g)) out[m[1]] = m[2].trim();
+    return out;
+  };
+  const root = read(/(?:^|\n):root\s*\{([^}]*)\}/);
+  return flavour === 'latte' ? { ...root, ...read(/:root\[data-flavour='latte'\]\s*\{([^}]*)\}/) } : root;
+}
+
+/**
+ * A flavour's palette with `--accent` bound to one of its hues, plus the
+ * tokens app.css builds on top of it (`--band-fill`, `--field-fill`, ...), so a
+ * test can resolve any colour a component actually uses without passing those
+ * tokens in by hand — and cannot measure a flavour against the wrong copy of
+ * one when Latte overrides it.
+ */
 export function themeVars(flavour: string, accent: string): Record<string, string> {
   const vars = palette(flavour);
-  return { ...vars, accent: vars[`ctp-${accent}`] };
+  return {
+    ...appTokens(flavour),
+    ...vars,
+    accent: vars[`ctp-${accent}`],
+    // What theme.css's [data-accent] rules bind alongside --accent.
+    'accent-ink': vars[`ink-${accent}`],
+    'accent-inverse-ink': vars[`inverse-ink-${accent}`],
+  };
 }
 
 /**
  * Pull one declaration out of one rule of a `.svelte` file's `<style>` block,
  * so a test can assert against the CSS that actually ships rather than a copy
  * of it. `selector` is matched literally and must be followed by `{`.
+ *
+ * Comments are stripped from the rule body before the property is looked for.
+ * The property has to follow `;` or open the rule, and without the strip a
+ * comment sitting directly above a declaration hid it: the lookup came back
+ * null and every test built on it failed with an unhelpful NaN. That bit three
+ * separate changes before it was fixed here rather than worked around by
+ * moving comments out of rules — where, in a stylesheet that explains itself
+ * the way this one does, they don't belong.
  */
 export function declaration(file: URL, selector: string, property: string): string | null {
   const css = fs.readFileSync(file, 'utf8');
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const rule = new RegExp(`(?:^|[\\s}])${escaped}\\s*\\{([^}]*)\\}`, 'm').exec(css);
   if (!rule) throw new Error(`no rule for selector ${selector}`);
-  const decl = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`).exec(rule[1]);
+  const body = rule[1].replace(/\/\*[\s\S]*?\*\//g, '');
+  const decl = new RegExp(`(?:^|;)\\s*${property}\\s*:\\s*([^;]+)`).exec(body);
   return decl ? decl[1].trim() : null;
 }
