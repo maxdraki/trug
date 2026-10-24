@@ -29,10 +29,9 @@ jobs:
     # The test suite must pass with NO LLM_API_KEY set, proving the app's
     # no-key / offline mode works. We deliberately do not set that secret here.
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up uv (with Python 3.12)
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
         with:
           python-version: "3.12"
 
@@ -56,12 +55,11 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Node 22 LTS. The repo was developed on Node 26, but the toolchain
       # (vite 8, vitest 4, svelte 5) supports Node 22+, so LTS is used here.
       - name: Set up Node 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -90,10 +88,9 @@ jobs:
     # them and fail if the committed copies drifted — catches a forgotten
     # `gen-icons`/`gen-theme` after an icon-map edit or a Tabler/Catppuccin bump.
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Node 22
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -120,13 +117,11 @@ jobs:
     # was only discovered by a self-hoster pulling :latest. Build it on every
     # change and prove the container actually serves.
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build image (amd64, loaded into the local daemon)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
@@ -250,8 +245,7 @@ jobs:
     # produces NO log, because logs only become fetchable once a job ends.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Lint (shellcheck)
         # install.sh is POSIX sh on purpose (a Pi's /bin/sh is dash), so it is
         # checked as `sh` rather than under shellcheck's bash default — which
@@ -262,11 +256,17 @@ jobs:
         # version in both directions, so an unpinned lint is a check that can
         # start failing on a commit that changed nothing, and can pass locally
         # while failing here. Bump this deliberately.
+        #
+        # The tarball is verified against a pinned sha256 before it is unpacked,
+        # so a swapped release asset cannot run on the runner. Bump both values
+        # together.
         env:
           SHELLCHECK_VERSION: v0.10.0
+          SHELLCHECK_SHA256: 6c881ab0698e4e6ea235245f22832860544f17ba386442fe7e9d629f8cbedf87
         run: |
-          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
-            | sudo tar -xJf - --strip-components=1 -C /usr/local/bin "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          curl -fsSL -o /tmp/shellcheck.tar.xz "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c -
+          sudo tar -xJf /tmp/shellcheck.tar.xz --strip-components=1 -C /usr/local/bin "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
           shellcheck --version
           shellcheck -s sh install.sh
           shellcheck bin/trug
@@ -278,10 +278,17 @@ jobs:
         # Homebrew's is 1.14 today. Those two disagree about whether a failing
         # `[[ ]]` fails a test, which is exactly the kind of silent semantic
         # change that must not arrive without a commit.
+        #
+        # Fetched by commit SHA, not by tag: a tag can be moved, a SHA cannot.
+        # BATS_SHA is the commit that v1.11.1 points at; bump both together.
         env:
           BATS_VERSION: v1.11.1
+          BATS_SHA: b640ec3cf2c7c9cfc9e6351479261186f76eeec8
         run: |
-          git clone --depth 1 --branch "$BATS_VERSION" https://github.com/bats-core/bats-core.git /tmp/bats-core
+          git init -q /tmp/bats-core
+          git -C /tmp/bats-core fetch -q --depth 1 https://github.com/bats-core/bats-core.git "$BATS_SHA"
+          git -C /tmp/bats-core checkout -q FETCH_HEAD
+          [ "$(git -C /tmp/bats-core rev-parse HEAD)" = "$BATS_SHA" ] || { echo "::error::bats checkout is not $BATS_SHA ($BATS_VERSION)"; exit 1; }
           sudo /tmp/bats-core/install.sh /usr/local
           bats --version
 
@@ -301,18 +308,16 @@ jobs:
     #
     # No macOS counterpart: GitHub's macOS runners ship no Docker daemon.
     steps:
-      - uses: actions/checkout@v7
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
-
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the image this commit produces
         # Tagged trug:ci, NOT ghcr.io/maxdraki/trug:latest. The published tag
         # pulls successfully at any time, so naming the local build after it
         # would just have `docker compose pull` replace it with the last release
         # — and the job would then install and test that, passing whatever this
         # commit did.
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
